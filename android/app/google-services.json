@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "388941372461",
+    "project_id": "transmeet-a1f3b",
+    "storage_bucket": "transmeet-a1f3b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:388941372461:android:08dce7dbdb6ac2d4ac6ca4",
+        "android_client_info": {
+          "package_name": "com.example.transmeet"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDhdguaPF6ARQmPPqEDd3bdOTy5l-0d2Ho"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
