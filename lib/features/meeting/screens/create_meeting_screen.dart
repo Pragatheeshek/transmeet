@@ -2,7 +2,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:transmeet/core/constants/app_constants.dart';
-import 'package:transmeet/core/utils/meeting_id_generator.dart';
 import 'package:transmeet/features/meeting/screens/meeting_details_screen.dart';
 import 'package:transmeet/features/meeting/services/meeting_service.dart';
 import 'package:transmeet/features/meeting/widgets/meeting_id_display.dart';
@@ -23,14 +22,8 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
   final _titleController = TextEditingController();
   final _meetingService = MeetingService();
 
-  late final String _generatedMeetingId;
+  String _selectedLanguage = AppConstants.supportedLanguages.first;
   bool _isCreating = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _generatedMeetingId = MeetingIdGenerator.generate();
-  }
 
   @override
   void dispose() {
@@ -71,6 +64,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
         hostUid: user.uid,
         hostName: user.displayName ?? user.email?.split('@').first ?? 'Host',
         hostEmail: user.email ?? '',
+        preferredLanguage: _selectedLanguage,
       );
 
       if (!mounted) return;
@@ -229,8 +223,41 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                 ),
                 const SizedBox(height: 8),
                 MeetingIdDisplay(
-                  meetingId: _generatedMeetingId,
+                  meetingId: 'TM-XXXXXX',
                   showCopyButton: false,
+                ),
+                const SizedBox(height: 20),
+
+                // Preferred language selector
+                Text(
+                  AppConstants.preferredLanguage,
+                  style: theme.textTheme.labelLarge,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedLanguage,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.language_rounded),
+                  ),
+                  items: AppConstants.supportedLanguages
+                      .map((lang) => DropdownMenuItem(
+                            value: lang,
+                            child: Text(lang),
+                          ))
+                      .toList(),
+                  onChanged: _isCreating
+                      ? null
+                      : (value) {
+                          if (value != null) {
+                            setState(() => _selectedLanguage = value);
+                          }
+                        },
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return AppConstants.languageRequired;
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 32),
 

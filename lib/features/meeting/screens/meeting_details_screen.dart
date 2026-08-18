@@ -143,6 +143,47 @@ class MeetingDetailsScreen extends StatelessWidget {
                         ),
                       ],
                     ),
+                    // Status
+                    const SizedBox(height: 20),
+
+                    // Preferred language
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.language_rounded,
+                          size: 18,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          AppConstants.preferredLanguage,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        const SizedBox(width: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary
+                                .withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: theme.colorScheme.primary
+                                  .withValues(alpha: 0.3),
+                            ),
+                          ),
+                          child: Text(
+                            meeting.preferredLanguage,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
 
                     // Status
                     const SizedBox(height: 20),

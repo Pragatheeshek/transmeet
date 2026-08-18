@@ -23,9 +23,9 @@ class AppConstants {
   static const String createMeeting = 'Create Meeting';
   static const String joinMeeting = 'Join Meeting';
   static const String recentMeetings = 'Recent Meetings';
-  static const String noRecentMeetings = 'No recent meetings';
+  static const String noRecentMeetings = 'No meetings yet';
   static const String noRecentMeetingsSubtext =
-      'Your recent meetings will appear here.';
+      'Create or join your first TransMeet meeting.';
   static const String preferredLanguage = 'Preferred Language';
   static const String defaultLanguage = 'English';
   static const String profile = 'Profile';
@@ -46,6 +46,26 @@ class AppConstants {
       'Meeting joining will be available in the next update.';
   static const String featureComingSoon =
       'This feature will be available soon.';
+
+  // ---------------------------------------------------------------------------
+  // Supported Languages
+  // ---------------------------------------------------------------------------
+  static const List<String> supportedLanguages = [
+    'English',
+    'Tamil',
+    'Hindi',
+    'Telugu',
+    'Malayalam',
+    'Kannada',
+    'French',
+    'German',
+    'Spanish',
+    'Japanese',
+    'Chinese',
+  ];
+
+  static const String selectLanguage = 'Select Language';
+  static const String languageRequired = 'Please select a preferred language.';
 
   // ---------------------------------------------------------------------------
   // Module 3 — Meeting Management
@@ -92,7 +112,7 @@ class AppConstants {
   static const String meetingRoom = 'Meeting Room';
   static const String leaveMeeting = 'Leave Meeting';
   static const String webrtcPlaceholder =
-      'Video conferencing will be available in the next module.';
+      'Your video meeting will appear here.';
   static const String leaveConfirmTitle = 'Leave Meeting';
   static const String leaveConfirmMessage =
       'Are you sure you want to leave this meeting?';

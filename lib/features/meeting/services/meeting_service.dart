@@ -33,6 +33,7 @@ class MeetingService {
     required String hostUid,
     required String hostName,
     required String hostEmail,
+    String preferredLanguage = 'English',
   }) async {
     String meetingId = MeetingIdGenerator.generate();
 
@@ -49,6 +50,7 @@ class MeetingService {
       hostUid: hostUid,
       hostName: hostName,
       hostEmail: hostEmail,
+      preferredLanguage: preferredLanguage,
       createdAt: DateTime.now(), // Server timestamp used in toFirestore().
       status: 'active',
       participantCount: 1,

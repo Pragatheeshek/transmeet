@@ -12,6 +12,7 @@ class MeetingModel {
     required this.hostUid,
     required this.hostName,
     required this.hostEmail,
+    required this.preferredLanguage,
     required this.createdAt,
     required this.status,
     required this.participantCount,
@@ -34,6 +35,9 @@ class MeetingModel {
 
   /// Email of the host.
   final String hostEmail;
+
+  /// Preferred language for translation in this meeting.
+  final String preferredLanguage;
 
   /// Timestamp when the meeting was created.
   final DateTime createdAt;
@@ -58,6 +62,7 @@ class MeetingModel {
       hostUid: data['hostUid'] as String? ?? '',
       hostName: data['hostName'] as String? ?? '',
       hostEmail: data['hostEmail'] as String? ?? '',
+      preferredLanguage: data['preferredLanguage'] as String? ?? 'English',
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       status: data['status'] as String? ?? 'active',
       participantCount: data['participantCount'] as int? ?? 1,
@@ -76,6 +81,7 @@ class MeetingModel {
       hostUid: data['hostUid'] as String? ?? '',
       hostName: data['hostName'] as String? ?? '',
       hostEmail: data['hostEmail'] as String? ?? '',
+      preferredLanguage: data['preferredLanguage'] as String? ?? 'English',
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       status: data['status'] as String? ?? 'active',
       participantCount: data['participantCount'] as int? ?? 1,
@@ -93,6 +99,7 @@ class MeetingModel {
       'hostUid': hostUid,
       'hostName': hostName,
       'hostEmail': hostEmail,
+      'preferredLanguage': preferredLanguage,
       'createdAt': FieldValue.serverTimestamp(),
       'status': status,
       'participantCount': participantCount,
@@ -108,6 +115,7 @@ class MeetingModel {
       'hostUid': hostUid,
       'hostName': hostName,
       'hostEmail': hostEmail,
+      'preferredLanguage': preferredLanguage,
       'createdAt': Timestamp.fromDate(createdAt),
       'status': status,
       'participantCount': participantCount,

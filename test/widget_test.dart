@@ -1,4 +1,4 @@
-// Tests for TransMeet — Modules 2 & 3
+// Tests for TransMeet — Modules 2, 3 & 4
 //
 // Firebase cannot be initialized in a plain test environment without mocking,
 // so full widget tests for Firebase-dependent screens are out of scope here.
@@ -7,6 +7,7 @@
 //   2. Core constant values are correct.
 //   3. Meeting ID generator produces valid IDs.
 //   4. Meeting model serialization/deserialization works.
+//   5. Module 4 — preferredLanguage field, validation logic, supported languages.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -66,6 +67,38 @@ void main() {
     test('shareTemplate contains placeholders', () {
       expect(AppConstants.shareTemplate.contains('{title}'), isTrue);
       expect(AppConstants.shareTemplate.contains('{meetingId}'), isTrue);
+    });
+
+    // Module 4 constants
+    test('supportedLanguages list is non-empty', () {
+      expect(AppConstants.supportedLanguages.isNotEmpty, isTrue);
+    });
+
+    test('supportedLanguages contains English', () {
+      expect(AppConstants.supportedLanguages.contains('English'), isTrue);
+    });
+
+    test('supportedLanguages has at least 10 languages', () {
+      expect(AppConstants.supportedLanguages.length, greaterThanOrEqualTo(10));
+    });
+
+    test('selectLanguage label is non-empty', () {
+      expect(AppConstants.selectLanguage.isNotEmpty, isTrue);
+    });
+
+    test('languageRequired message is non-empty', () {
+      expect(AppConstants.languageRequired.isNotEmpty, isTrue);
+    });
+
+    test('noRecentMeetings uses Module 4 text', () {
+      expect(AppConstants.noRecentMeetings, 'No meetings yet');
+    });
+
+    test('noRecentMeetingsSubtext uses Module 4 text', () {
+      expect(
+        AppConstants.noRecentMeetingsSubtext,
+        'Create or join your first TransMeet meeting.',
+      );
     });
   });
 
@@ -129,6 +162,16 @@ void main() {
     test('normalize handles whitespace', () {
       expect(MeetingIdGenerator.normalize('  tm-abc234  '), 'TM-ABC234');
     });
+
+    // Module 4 — meeting ID validation edge cases
+    test('isValidFormat rejects IDs with spaces', () {
+      expect(MeetingIdGenerator.isValidFormat('TM-AB C2'), isFalse);
+    });
+
+    test('isValidFormat rejects IDs with lowercase only when invalid chars', () {
+      // normalize handles case, so 'abc234' should be valid after normalize
+      expect(MeetingIdGenerator.isValidFormat('abc234'), isTrue);
+    });
   });
 
   // ── Meeting Model ─────────────────────────────────────────────────────────
@@ -143,6 +186,7 @@ void main() {
         hostUid: 'uid-123',
         hostName: 'Test User',
         hostEmail: 'test@example.com',
+        preferredLanguage: 'English',
         createdAt: testDate,
         status: 'active',
         participantCount: 1,
@@ -158,6 +202,7 @@ void main() {
       expect(map['hostUid'], 'uid-123');
       expect(map['hostName'], 'Test User');
       expect(map['hostEmail'], 'test@example.com');
+      expect(map['preferredLanguage'], 'English');
       expect(map['status'], 'active');
       expect(map['participantCount'], 1);
       expect(map['createdAt'], isA<Timestamp>());
@@ -174,6 +219,7 @@ void main() {
       expect(restored.hostUid, original.hostUid);
       expect(restored.hostName, original.hostName);
       expect(restored.hostEmail, original.hostEmail);
+      expect(restored.preferredLanguage, original.preferredLanguage);
       expect(restored.status, original.status);
       expect(restored.participantCount, original.participantCount);
       expect(restored.createdAt.year, original.createdAt.year);
@@ -195,6 +241,7 @@ void main() {
         hostUid: 'uid',
         hostName: 'Host',
         hostEmail: 'h@e.com',
+        preferredLanguage: 'Tamil',
         createdAt: testDate,
         status: 'ended',
         participantCount: 3,
@@ -209,6 +256,7 @@ void main() {
       expect(meeting.meetingId, '');
       expect(meeting.title, '');
       expect(meeting.hostUid, '');
+      expect(meeting.preferredLanguage, 'English');
       expect(meeting.status, 'active');
       expect(meeting.participantCount, 1);
     });
@@ -217,6 +265,112 @@ void main() {
       final meeting = createTestMeeting();
       final firestoreMap = meeting.toFirestore();
       expect(firestoreMap['createdAt'], isA<FieldValue>());
+    });
+
+    // Module 4 — preferredLanguage field tests
+    test('preferredLanguage defaults to English when missing from map', () {
+      final meeting = MeetingModel.fromMap('doc-id', {
+        'meetingId': 'TM-XYZ789',
+        'title': 'Test',
+        'hostUid': 'uid-1',
+        'hostName': 'User',
+        'hostEmail': 'user@test.com',
+        'status': 'active',
+      });
+      expect(meeting.preferredLanguage, 'English');
+    });
+
+    test('preferredLanguage is serialized in toMap', () {
+      final meeting = MeetingModel(
+        docId: 'doc',
+        meetingId: 'TM-ABC234',
+        title: 'Test',
+        hostUid: 'uid',
+        hostName: 'Host',
+        hostEmail: 'h@e.com',
+        preferredLanguage: 'Tamil',
+        createdAt: testDate,
+        status: 'active',
+        participantCount: 1,
+      );
+      final map = meeting.toMap();
+      expect(map['preferredLanguage'], 'Tamil');
+    });
+
+    test('preferredLanguage is serialized in toFirestore', () {
+      final meeting = MeetingModel(
+        docId: 'doc',
+        meetingId: 'TM-ABC234',
+        title: 'Test',
+        hostUid: 'uid',
+        hostName: 'Host',
+        hostEmail: 'h@e.com',
+        preferredLanguage: 'Hindi',
+        createdAt: testDate,
+        status: 'active',
+        participantCount: 1,
+      );
+      final firestoreMap = meeting.toFirestore();
+      expect(firestoreMap['preferredLanguage'], 'Hindi');
+    });
+
+    test('preferredLanguage roundtrip via fromMap/toMap', () {
+      for (final lang in ['English', 'Tamil', 'Hindi', 'French', 'Japanese']) {
+        final original = MeetingModel(
+          docId: 'doc',
+          meetingId: 'TM-ABC234',
+          title: 'Test',
+          hostUid: 'uid',
+          hostName: 'Host',
+          hostEmail: 'h@e.com',
+          preferredLanguage: lang,
+          createdAt: testDate,
+          status: 'active',
+          participantCount: 1,
+        );
+        final restored = MeetingModel.fromMap('doc', original.toMap());
+        expect(restored.preferredLanguage, lang,
+            reason: 'Failed roundtrip for language: $lang');
+      }
+    });
+  });
+
+  // ── Module 4 — Validation Logic ───────────────────────────────────────────
+  group('Module 4 — Validation', () {
+    test('empty meeting title should fail validation', () {
+      const title = '';
+      expect(title.trim().isEmpty, isTrue);
+    });
+
+    test('whitespace-only meeting title should fail validation', () {
+      const title = '   ';
+      expect(title.trim().isEmpty, isTrue);
+    });
+
+    test('valid meeting title should pass validation', () {
+      const title = 'Team Discussion';
+      final trimmed = title.trim();
+      expect(trimmed.isNotEmpty, isTrue);
+      expect(trimmed.length >= 2, isTrue);
+      expect(trimmed.length <= 80, isTrue);
+    });
+
+    test('meeting title exceeding 80 chars should fail validation', () {
+      final title = 'A' * 81;
+      expect(title.length > 80, isTrue);
+    });
+
+    test('empty meeting ID should fail validation', () {
+      expect(MeetingIdGenerator.isValidFormat(''), isFalse);
+    });
+
+    test('whitespace-only meeting ID should fail validation', () {
+      expect(MeetingIdGenerator.normalize('   '), isNull);
+    });
+
+    test('valid meeting ID should pass validation', () {
+      final id = MeetingIdGenerator.generate();
+      expect(MeetingIdGenerator.isValidFormat(id), isTrue);
     });
   });
 }

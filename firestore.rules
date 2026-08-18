@@ -18,14 +18,25 @@ service cloud.firestore {
 
       // Only the host can update host-controlled fields.
       // Any authenticated user can increment participantCount (for joining).
+      // Any authenticated user can add an 'answer' for WebRTC signaling.
       allow update: if request.auth != null
                     && (resource.data.hostUid == request.auth.uid
                         || request.resource.data.diff(resource.data)
-                           .affectedKeys().hasOnly(['participantCount']));
+                           .affectedKeys().hasOnly(['participantCount'])
+                        || request.resource.data.diff(resource.data)
+                           .affectedKeys().hasOnly(['answer']));
 
       // Only the host can delete their meeting.
       allow delete: if request.auth != null
                     && resource.data.hostUid == request.auth.uid;
+
+      // WebRTC Signaling: ICE candidates
+      match /callerCandidates/{candidateId} {
+        allow read, write: if request.auth != null;
+      }
+      match /calleeCandidates/{candidateId} {
+        allow read, write: if request.auth != null;
+      }
     }
 
     // =========================================================================
