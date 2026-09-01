@@ -5,7 +5,24 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "hostUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "meetings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "meetingId", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "participants",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "joinedAt", "order": "ASCENDING" }
       ]
     }
   ],

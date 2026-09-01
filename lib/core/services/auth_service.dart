@@ -1,4 +1,6 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 /// Centralized authentication service for TransMeet.
@@ -10,9 +12,12 @@ import 'package:google_sign_in/google_sign_in.dart';
 class AuthService {
   AuthService({
     FirebaseAuth? firebaseAuth,
-  }) : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance;
+    FirebaseFirestore? firestore,
+  })  : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance,
+        _firestore = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseAuth _firebaseAuth;
+  final FirebaseFirestore _firestore;
 
   /// Whether the Google Sign-In plugin has been initialized.
   static bool _googleInitialized = false;
@@ -39,10 +44,14 @@ class AuthService {
     required String password,
   }) async {
     try {
-      return await _firebaseAuth.createUserWithEmailAndPassword(
+      final credential = await _firebaseAuth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
+      if (credential.user != null) {
+        await _upsertUserProfile(credential.user!);
+      }
+      return credential;
     } on FirebaseAuthException catch (e) {
       throw _mapFirebaseAuthError(e.code);
     } catch (_) {
@@ -58,10 +67,14 @@ class AuthService {
     required String password,
   }) async {
     try {
-      return await _firebaseAuth.signInWithEmailAndPassword(
+      final credential = await _firebaseAuth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
+      if (credential.user != null) {
+        await _upsertUserProfile(credential.user!);
+      }
+      return credential;
     } on FirebaseAuthException catch (e) {
       throw _mapFirebaseAuthError(e.code);
     } catch (_) {
@@ -99,7 +112,11 @@ class AuthService {
         idToken: googleAuth.idToken,
       );
 
-      return await _firebaseAuth.signInWithCredential(credential);
+      final result = await _firebaseAuth.signInWithCredential(credential);
+      if (result.user != null) {
+        await _upsertUserProfile(result.user!);
+      }
+      return result;
     } on FirebaseAuthException catch (e) {
       throw _mapFirebaseAuthError(e.code);
     } catch (e) {
@@ -123,6 +140,43 @@ class AuthService {
   //   provider.addScope('User.Read');
   //   return await _firebaseAuth.signInWithProvider(provider);
   // }
+
+  // ---------------------------------------------------------------------------
+  // User Profile Persistence
+  // ---------------------------------------------------------------------------
+
+  /// Upserts the user profile in Firestore after a successful auth event.
+  ///
+  /// Uses `merge: true` so existing fields (like `preferredLanguageCode`)
+  /// are not overwritten.
+  Future<void> _upsertUserProfile(User user) async {
+    try {
+      await _firestore.collection('users').doc(user.uid).set({
+        'displayName': user.displayName ?? '',
+        'email': user.email ?? '',
+        'photoURL': user.photoURL ?? '',
+        'lastSeen': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(), // merge: true won't overwrite
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('[Auth] Failed to upsert user profile: $e');
+    }
+  }
+
+  /// Updates the `lastSeen` timestamp for the current user.
+  ///
+  /// Called from main.dart when the app launches with an authenticated user.
+  Future<void> updateLastSeen() async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) return;
+    try {
+      await _firestore.collection('users').doc(user.uid).update({
+        'lastSeen': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('[Auth] Failed to update lastSeen: $e');
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Sign Out

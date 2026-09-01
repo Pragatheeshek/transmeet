@@ -3,13 +3,16 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 /// A reusable widget to render WebRTC video streams.
 ///
-/// It handles the initialization and disposal of the [RTCVideoRenderer].
+/// Handles initialization and disposal of [RTCVideoRenderer].
+/// Shows a clean avatar placeholder (instead of a spinner) when the
+/// stream is not yet available — prevents the black/blank screen issue.
 class WebRTCVideoView extends StatefulWidget {
   const WebRTCVideoView({
     super.key,
     required this.stream,
     this.mirror = false,
     this.objectFit = RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+    this.placeholderLabel,
   });
 
   /// The media stream to render.
@@ -20,6 +23,9 @@ class WebRTCVideoView extends StatefulWidget {
 
   /// How the video should be fitted into its bounds.
   final RTCVideoViewObjectFit objectFit;
+
+  /// Optional label shown in the placeholder (e.g. participant name initial).
+  final String? placeholderLabel;
 
   @override
   State<WebRTCVideoView> createState() => _WebRTCVideoViewState();
@@ -48,6 +54,7 @@ class _WebRTCVideoViewState extends State<WebRTCVideoView> {
   @override
   void didUpdateWidget(covariant WebRTCVideoView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Update renderer whenever the stream reference changes.
     if (widget.stream != oldWidget.stream && _isInitialized) {
       setState(() {
         _renderer.srcObject = widget.stream;
@@ -64,19 +71,48 @@ class _WebRTCVideoViewState extends State<WebRTCVideoView> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_isInitialized || widget.stream == null) {
-      return Container(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: const Center(
-          child: CircularProgressIndicator(),
-        ),
+    // Show video only when renderer is ready AND a stream is present.
+    if (_isInitialized && widget.stream != null) {
+      return RTCVideoView(
+        _renderer,
+        mirror: widget.mirror,
+        objectFit: widget.objectFit,
       );
     }
 
-    return RTCVideoView(
-      _renderer,
-      mirror: widget.mirror,
-      objectFit: widget.objectFit,
+    // Clean avatar placeholder — no black screen, no spinning indicator.
+    return Container(
+      color: Colors.grey[900],
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 36,
+              backgroundColor: Colors.grey[700],
+              child: Text(
+                widget.placeholderLabel?.isNotEmpty == true
+                    ? widget.placeholderLabel![0].toUpperCase()
+                    : '?',
+                style: const TextStyle(
+                  fontSize: 32,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (widget.stream == null) ...[
+              const SizedBox(height: 12),
+              Text(
+                widget.placeholderLabel != null
+                    ? 'Camera off'
+                    : 'Waiting for video...',
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

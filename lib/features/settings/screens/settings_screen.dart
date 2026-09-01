@@ -1,12 +1,141 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:transmeet/core/constants/app_constants.dart';
+import 'package:transmeet/features/translation/models/translation_language.dart';
 
 /// Settings screen for TransMeet.
 ///
-/// UI-only placeholder for Module 2. Actual functionality will be wired
-/// in future modules.
-class SettingsScreen extends StatelessWidget {
+/// Provides language preference selection backed by Firestore.
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  String _selectedLanguageName = AppConstants.defaultLanguage;
+  bool _isLoadingLanguage = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLanguagePreference();
+  }
+
+  Future<void> _loadLanguagePreference() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() => _isLoadingLanguage = false);
+      return;
+    }
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (doc.exists) {
+        final data = doc.data();
+        final langCode = data?['preferredLanguageCode'] as String? ?? 'en';
+        final lang = TranslationLanguage.fromCode(langCode);
+        if (lang != null && mounted) {
+          setState(() => _selectedLanguageName = lang.name);
+        }
+      }
+    } catch (_) {
+      // Use default
+    }
+
+    if (mounted) setState(() => _isLoadingLanguage = false);
+  }
+
+  Future<void> _showLanguagePicker() async {
+    final selected = await showDialog<TranslationLanguage>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text(AppConstants.selectMyLanguage),
+        children: TranslationLanguage.supportedLanguages.map((lang) {
+          final isSelected = lang.name == _selectedLanguageName;
+          return SimpleDialogOption(
+            onPressed: () => Navigator.of(ctx).pop(lang),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    lang.name,
+                    style: TextStyle(
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected
+                          ? Theme.of(ctx).colorScheme.primary
+                          : null,
+                    ),
+                  ),
+                ),
+                Text(
+                  lang.code.toUpperCase(),
+                  style: TextStyle(
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+                if (isSelected) ...[
+                  const SizedBox(width: 8),
+                  Icon(Icons.check_rounded,
+                      size: 18, color: Theme.of(ctx).colorScheme.primary),
+                ],
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+
+    if (selected != null && selected.name != _selectedLanguageName) {
+      await _saveLanguagePreference(selected);
+    }
+  }
+
+  Future<void> _saveLanguagePreference(TranslationLanguage language) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'preferredLanguageCode': language.code,
+        'preferredLanguage': language.name,
+        'displayName': user.displayName ?? '',
+        'email': user.email ?? '',
+      }, SetOptions(merge: true));
+
+      if (mounted) {
+        setState(() => _selectedLanguageName = language.name);
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text(AppConstants.languageSaved),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              content: const Text(AppConstants.languageSaveFailed),
+              backgroundColor: Theme.of(context).colorScheme.error,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,23 +171,31 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 24),
 
             // ── Language ────────────────────────────────────────────────────
-            _SectionHeader(label: 'Preferred Language'),
+            _SectionHeader(label: 'Translation Language'),
             const SizedBox(height: 8),
             _SettingsTile(
-              icon: Icons.language_rounded,
-              title: AppConstants.defaultLanguage,
-              subtitle: 'App interface and translation language',
-              trailing: const Row(
+              icon: Icons.translate_rounded,
+              title: AppConstants.myLanguage,
+              subtitle: 'Language for translation during meetings',
+              trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('English',
-                      style: TextStyle(color: Colors.grey, fontSize: 13)),
-                  SizedBox(width: 4),
+                  if (_isLoadingLanguage)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Text(_selectedLanguageName,
+                        style: TextStyle(
+                            color: theme.colorScheme.primary, fontSize: 13)),
+                  const SizedBox(width: 4),
                   Icon(Icons.chevron_right_rounded,
-                      color: Colors.grey, size: 20),
+                      color: theme.colorScheme.onSurfaceVariant, size: 20),
                 ],
               ),
-              onTap: () => _showComingSoon(context),
+              onTap: _showLanguagePicker,
             ),
             const SizedBox(height: 24),
 

@@ -1,1 +1,29 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"transmeet-a1f3b","appId":"1:388941372461:android:08dce7dbdb6ac2d4ac6ca4","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"transmeet-a1f3b","configurations":{"android":"1:388941372461:android:08dce7dbdb6ac2d4ac6ca4","ios":"1:388941372461:ios:c2cce5b3e8e4edc9ac6ca4","macos":"1:388941372461:ios:c2cce5b3e8e4edc9ac6ca4","web":"1:388941372461:web:1afa87e937c2b8daac6ca4","windows":"1:388941372461:web:11e13cc979c030caac6ca4"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "transmeet-a1f3b",
+          "appId": "1:388941372461:android:08dce7dbdb6ac2d4ac6ca4",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "transmeet-a1f3b",
+          "configurations": {
+            "android": "1:388941372461:android:08dce7dbdb6ac2d4ac6ca4",
+            "ios": "1:388941372461:ios:c2cce5b3e8e4edc9ac6ca4",
+            "macos": "1:388941372461:ios:c2cce5b3e8e4edc9ac6ca4",
+            "web": "1:388941372461:web:1afa87e937c2b8daac6ca4",
+            "windows": "1:388941372461:web:11e13cc979c030caac6ca4"
+          }
+        }
+      }
+    }
+  }
+}

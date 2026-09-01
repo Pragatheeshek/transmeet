@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:transmeet/core/constants/app_constants.dart';
 import 'package:transmeet/features/meeting/models/meeting_model.dart';
-import 'package:transmeet/features/meeting/screens/meeting_room_screen.dart';
+import 'package:transmeet/features/meeting/screens/meeting_lobby_screen.dart';
 import 'package:transmeet/features/meeting/widgets/meeting_action_buttons.dart';
 import 'package:transmeet/features/meeting/widgets/meeting_id_display.dart';
 
@@ -25,7 +25,7 @@ class MeetingDetailsScreen extends StatelessWidget {
   void _enterMeetingRoom(BuildContext context) {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => MeetingRoomScreen(meeting: meeting),
+        builder: (_) => MeetingLobbyScreen(meeting: meeting),
       ),
     );
   }

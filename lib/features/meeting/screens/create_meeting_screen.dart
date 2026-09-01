@@ -24,6 +24,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
 
   String _selectedLanguage = AppConstants.supportedLanguages.first;
   bool _isCreating = false;
+  bool _admissionControl = false;
 
   @override
   void dispose() {
@@ -65,6 +66,7 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
         hostName: user.displayName ?? user.email?.split('@').first ?? 'Host',
         hostEmail: user.email ?? '',
         preferredLanguage: _selectedLanguage,
+        admissionControl: _admissionControl,
       );
 
       if (!mounted) return;
@@ -258,6 +260,44 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                     }
                     return null;
                   },
+                ),
+                const SizedBox(height: 20),
+
+                // Admission control toggle
+                Container(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: theme.colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.15),
+                    ),
+                  ),
+                  child: SwitchListTile(
+                    value: _admissionControl,
+                    onChanged: _isCreating
+                        ? null
+                        : (value) =>
+                            setState(() => _admissionControl = value),
+                    title: const Text('Require admission'),
+                    subtitle: Text(
+                      _admissionControl
+                          ? 'You must approve each participant'
+                          : 'Anyone with the meeting ID can join',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    secondary: Icon(
+                      _admissionControl
+                          ? Icons.lock_rounded
+                          : Icons.lock_open_rounded,
+                      color: theme.colorScheme.primary,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 32),
 

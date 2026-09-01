@@ -127,4 +127,35 @@ class AppConstants {
   // Status labels
   static const String statusActive = 'Active';
   static const String statusEnded = 'Ended';
+
+  // ---------------------------------------------------------------------------
+  // Module 5 — AI Translation
+  // ---------------------------------------------------------------------------
+
+  /// Base URL for the Node.js translation backend.
+  /// During development, use your machine's LAN IP (e.g. http://192.168.x.x:3001).
+  static const String backendBaseUrl = 'http://10.0.2.2:3001';
+
+  // Translation UI strings
+  static const String translationEnabled = 'Translation: ON';
+  static const String translationDisabled = 'Translation: OFF';
+  static const String translationToggle = 'Translation';
+  static const String myLanguage = 'My Language';
+  static const String selectMyLanguage = 'Select Your Language';
+  static const String languageSaved = 'Language preference saved.';
+  static const String languageSaveFailed =
+      'Failed to save language preference. Please try again.';
+  static const String translationUnavailable =
+      'Translation service unavailable. Please check your connection.';
+  static const String speechNotRecognized =
+      'Speech could not be recognized. Please try again.';
+  static const String translationFailed =
+      'Translation failed. Please try again.';
+  static const String ttsFailed = 'Text-to-speech failed. Please try again.';
+  static const String noInternetConnection =
+      'No internet connection. Please check your network.';
+  static const String apiTimeout =
+      'Request timed out. Please try again.';
+  static const String unsupportedLanguage =
+      'This language is not supported.';
 }

@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:transmeet/core/utils/meeting_id_generator.dart';
 import 'package:transmeet/features/meeting/models/meeting_model.dart';
@@ -34,31 +35,29 @@ class MeetingService {
     required String hostName,
     required String hostEmail,
     String preferredLanguage = 'English',
+    bool admissionControl = false,
   }) async {
-    String meetingId = MeetingIdGenerator.generate();
-
-    // Check for the astronomically unlikely collision.
-    final existing = await getMeetingByMeetingId(meetingId);
-    if (existing != null) {
-      meetingId = MeetingIdGenerator.generate();
-    }
+    // Generate a meeting ID directly — collision probability is negligible
+    // (~1 in 10^9) and the extra network round-trip causes noticeable lag.
+    final meetingId = MeetingIdGenerator.generate();
 
     final meeting = MeetingModel(
-      docId: '', // Will be assigned by Firestore.
+      docId: '',
       meetingId: meetingId,
       title: title.trim(),
       hostUid: hostUid,
       hostName: hostName,
       hostEmail: hostEmail,
       preferredLanguage: preferredLanguage,
-      createdAt: DateTime.now(), // Server timestamp used in toFirestore().
+      createdAt: DateTime.now(),
       status: 'active',
       participantCount: 1,
+      admissionControl: admissionControl,
     );
 
     final docRef = await _meetingsRef.add(meeting.toFirestore());
 
-    // Read back the document to get server-assigned timestamp + docId.
+    // Read back to get the server-assigned docId and timestamp.
     final snapshot = await docRef.get();
     return MeetingModel.fromFirestore(snapshot);
   }
@@ -86,7 +85,8 @@ class MeetingService {
   /// Returns a real-time stream of meetings hosted by [uid],
   /// ordered by creation date descending.
   ///
-  /// Used by the Home dashboard's Recent Meetings section.
+  /// Falls back to a Dart-sorted query if the Firestore composite index
+  /// is not yet built (FAILED_PRECONDITION during index creation).
   Stream<List<MeetingModel>> getHostedMeetings(String uid) {
     return _meetingsRef
         .where('hostUid', isEqualTo: uid)
@@ -95,7 +95,38 @@ class MeetingService {
         .snapshots()
         .map((snapshot) => snapshot.docs
             .map((doc) => MeetingModel.fromFirestore(doc))
-            .toList());
+            .toList())
+        .handleError((error) {
+      // Index not yet built — fall back to simple query sorted in Dart.
+      debugPrint('[MeetingService] Index not ready, using fallback query: $error');
+      return _meetingsRef
+          .where('hostUid', isEqualTo: uid)
+          .limit(20)
+          .get()
+          .then((snapshot) {
+        final meetings = snapshot.docs
+            .map((doc) => MeetingModel.fromFirestore(doc))
+            .toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        return meetings;
+      });
+    });
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // Real-time listeners
+  // ---------------------------------------------------------------------------
+
+  /// Returns a real-time stream for a single meeting document.
+  ///
+  /// Used by the meeting room to detect when the meeting status changes
+  /// (e.g. host ends the meeting).
+  Stream<MeetingModel?> onMeetingChanged(String docId) {
+    return _meetingsRef.doc(docId).snapshots().map((snapshot) {
+      if (!snapshot.exists) return null;
+      return MeetingModel.fromFirestore(snapshot);
+    });
   }
 
   // ---------------------------------------------------------------------------

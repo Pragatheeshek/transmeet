@@ -16,6 +16,7 @@ class MeetingModel {
     required this.createdAt,
     required this.status,
     required this.participantCount,
+    this.admissionControl = false,
   });
 
   /// Firestore document ID (internal — never exposed to the user).
@@ -48,6 +49,12 @@ class MeetingModel {
   /// Number of participants (host counts as 1).
   final int participantCount;
 
+  /// Whether participants need host approval to join.
+  ///
+  /// `true`  = Google Meet "Host must approve" — participants wait in lobby.
+  /// `false` = Anyone with the meeting ID can join directly.
+  final bool admissionControl;
+
   // ---------------------------------------------------------------------------
   // Firestore serialization
   // ---------------------------------------------------------------------------
@@ -66,6 +73,7 @@ class MeetingModel {
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       status: data['status'] as String? ?? 'active',
       participantCount: data['participantCount'] as int? ?? 1,
+      admissionControl: data['admissionControl'] as bool? ?? false,
     );
   }
 
@@ -85,6 +93,7 @@ class MeetingModel {
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       status: data['status'] as String? ?? 'active',
       participantCount: data['participantCount'] as int? ?? 1,
+      admissionControl: data['admissionControl'] as bool? ?? false,
     );
   }
 
@@ -103,6 +112,7 @@ class MeetingModel {
       'createdAt': FieldValue.serverTimestamp(),
       'status': status,
       'participantCount': participantCount,
+      'admissionControl': admissionControl,
     };
   }
 
@@ -119,6 +129,7 @@ class MeetingModel {
       'createdAt': Timestamp.fromDate(createdAt),
       'status': status,
       'participantCount': participantCount,
+      'admissionControl': admissionControl,
     };
   }
 

@@ -8,6 +8,7 @@ import 'package:transmeet/features/home/widgets/recent_meetings_section.dart';
 import 'package:transmeet/features/home/widgets/welcome_header.dart';
 import 'package:transmeet/features/meeting/screens/create_meeting_screen.dart';
 import 'package:transmeet/features/meeting/screens/join_meeting_screen.dart';
+import 'package:transmeet/features/meeting/screens/meeting_history_screen.dart';
 import 'package:transmeet/features/profile/screens/profile_screen.dart';
 import 'package:transmeet/features/settings/screens/settings_screen.dart';
 
@@ -58,14 +59,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openHistory() {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        const SnackBar(
-          content: Text(AppConstants.featureComingSoon),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const MeetingHistoryScreen()),
+    );
   }
 
   // ---------------------------------------------------------------------------

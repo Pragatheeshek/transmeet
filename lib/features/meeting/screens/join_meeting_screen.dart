@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:transmeet/core/constants/app_constants.dart';
 import 'package:transmeet/core/utils/meeting_id_generator.dart';
@@ -38,7 +39,10 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
   String? _validateMeetingId(String? value) {
     final trimmed = value?.trim() ?? '';
     if (trimmed.isEmpty) return AppConstants.meetingIdRequired;
-    if (!MeetingIdGenerator.isValidFormat(trimmed)) {
+    // Normalize first (handles lowercase, missing prefix, whitespace),
+    // then validate — this prevents false "Not Found" from format rejection.
+    final normalized = MeetingIdGenerator.normalize(trimmed);
+    if (normalized == null || !MeetingIdGenerator.isValidFormat(normalized)) {
       return AppConstants.meetingIdInvalidFormat;
     }
     return null;
@@ -49,7 +53,6 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
   // ---------------------------------------------------------------------------
 
   Future<void> _onJoinMeeting() async {
-    // Clear previous search error.
     setState(() => _searchError = null);
 
     if (!_formKey.currentState!.validate()) return;
@@ -59,7 +62,9 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
 
     try {
       final inputId = _meetingIdController.text.trim();
-      final meeting = await _meetingService.getMeetingByMeetingId(inputId);
+      // Always normalize before querying — handles lowercase, missing prefix.
+      final normalized = MeetingIdGenerator.normalize(inputId) ?? inputId;
+      final meeting = await _meetingService.getMeetingByMeetingId(normalized);
 
       if (!mounted) return;
 
@@ -90,13 +95,8 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
       setState(() => _isSearching = false);
 
       if (confirmed == true) {
-        // Increment participant count.
         final user = FirebaseAuth.instance.currentUser;
         final isHost = user != null && user.uid == meeting.hostUid;
-
-        if (!isHost) {
-          await _meetingService.incrementParticipantCount(meeting.docId);
-        }
 
         if (!mounted) return;
 
@@ -284,12 +284,13 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
                     prefixIcon: const Icon(Icons.tag_rounded),
                     errorText: _searchError,
                   ),
+                  // Auto-uppercase so the user always sees TM-XXXXXX format.
                   textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [UpperCaseTextFormatter()],
                   textInputAction: TextInputAction.done,
                   enabled: !_isSearching,
                   onFieldSubmitted: (_) => _onJoinMeeting(),
                   onChanged: (_) {
-                    // Clear search error when user types.
                     if (_searchError != null) {
                       setState(() => _searchError = null);
                     }
@@ -324,6 +325,21 @@ class _JoinMeetingScreenState extends State<JoinMeetingScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Forces all typed characters to uppercase so meeting IDs always match
+/// the expected TM-XXXXXX format regardless of keyboard settings.
+class UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    return newValue.copyWith(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
     );
   }
 }
