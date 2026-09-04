@@ -8,7 +8,6 @@ import 'package:transmeet/features/home/widgets/welcome_header.dart';
 import 'package:transmeet/features/meeting/screens/create_meeting_screen.dart';
 import 'package:transmeet/features/meeting/screens/join_meeting_screen.dart';
 import 'package:transmeet/features/meeting/screens/meeting_history_screen.dart';
-import 'package:transmeet/features/profile/screens/profile_screen.dart';
 import 'package:transmeet/features/settings/screens/settings_screen.dart';
 
 /// Main dashboard screen shown to authenticated users.
@@ -33,11 +32,6 @@ class _HomeScreenState extends State<HomeScreen> {
   // Navigation helpers
   // ---------------------------------------------------------------------------
 
-  void _openProfile() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-    );
-  }
 
   void _openSettings() {
     Navigator.of(context).push(
@@ -165,11 +159,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     onTap: _openHistory,
                   ),
                   QuickAction(
-                    icon: Icons.person_rounded,
-                    label: 'Profile',
-                    onTap: _openProfile,
-                  ),
-                  QuickAction(
                     icon: Icons.settings_rounded,
                     label: 'Settings',
                     onTap: _openSettings,
@@ -215,7 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               IconButton(
                 tooltip: 'Profile',
-                onPressed: _openProfile,
+                onPressed: _openSettings,
                 icon: _buildAvatarIcon(context, photoUrl, displayName),
               ),
               PopupMenuButton<String>(

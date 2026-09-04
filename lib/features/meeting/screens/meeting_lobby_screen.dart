@@ -187,6 +187,10 @@ class _MeetingLobbyScreenState extends State<MeetingLobbyScreen> {
   }
 
   void _enterMeetingRoom() {
+    // Capture lobby state before disposing preview
+    final cameraOff = !_isCameraOn;
+    final micMuted = !_isMicOn;
+
     // Dispose preview stream — the meeting room will create its own.
     _localStream?.dispose();
     _localStream = null;
@@ -194,7 +198,11 @@ class _MeetingLobbyScreenState extends State<MeetingLobbyScreen> {
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => MeetingRoomScreen(meeting: widget.meeting),
+        builder: (_) => MeetingRoomScreen(
+          meeting: widget.meeting,
+          initialCameraOff: cameraOff,
+          initialMicMuted: micMuted,
+        ),
       ),
     );
   }

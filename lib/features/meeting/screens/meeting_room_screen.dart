@@ -13,6 +13,7 @@ import 'package:transmeet/features/meeting/services/meeting_service.dart';
 import 'package:transmeet/features/meeting/services/participant_service.dart';
 import 'package:transmeet/features/meeting/services/webrtc_service.dart';
 import 'package:transmeet/features/meeting/widgets/admission_banner.dart';
+import 'package:transmeet/features/meeting/widgets/live_transcription_panel.dart';
 import 'package:transmeet/features/meeting/widgets/participant_panel.dart';
 import 'package:transmeet/features/meeting/widgets/webrtc_video_view.dart';
 import 'package:transmeet/features/translation/widgets/translation_overlay.dart';
@@ -30,8 +31,15 @@ enum _Phase {
 }
 
 class MeetingRoomScreen extends StatefulWidget {
-  const MeetingRoomScreen({super.key, required this.meeting});
+  const MeetingRoomScreen({
+    super.key,
+    required this.meeting,
+    this.initialCameraOff = false,
+    this.initialMicMuted = false,
+  });
   final MeetingModel meeting;
+  final bool initialCameraOff;
+  final bool initialMicMuted;
 
   @override
   State<MeetingRoomScreen> createState() => _MeetingRoomScreenState();
@@ -50,7 +58,16 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   bool _isCameraOff = false;
   bool _isSpeakerOn = true;
   bool _isTranslationEnabled = false;
+  bool _isScreenSharing = false;
+  bool _isLiveTranscriptionOn = false;
   String _initError = '';
+
+  // ─── Screen share ──────────────────────────────────────────────────────────
+  MediaStream? _screenStream;
+  MediaStreamTrack? _savedCameraTrack;
+
+  // ─── Transcription ──────────────────────────────────────────────────────────
+  final List<TranscriptionEntry> _transcriptionEntries = [];
 
   // ─── Participant / WebRTC state ─────────────────────────────────────────────
   List<ParticipantModel> _participants = [];
@@ -82,6 +99,9 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   @override
   void initState() {
     super.initState();
+    // Apply initial lobby state
+    _isCameraOff = widget.initialCameraOff;
+    _isMicMuted = widget.initialMicMuted;
     WidgetsBinding.instance.addObserver(this);
     _meetingStopwatch.start();
     _clockTimer = Timer.periodic(
@@ -130,6 +150,14 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       }
 
       await _webRTCService.initLocalStream();
+
+      // Apply initial lobby state: disable tracks if user turned them off
+      if (_isCameraOff) {
+        _webRTCService.toggleCamera(false);
+      }
+      if (_isMicMuted) {
+        _webRTCService.toggleMicrophone(false);
+      }
 
       try {
         await Helper.setSpeakerphoneOn(true);
@@ -371,6 +399,85 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   void _toggleTranslation() =>
       setState(() => _isTranslationEnabled = !_isTranslationEnabled);
 
+  Future<void> _toggleScreenShare() async {
+    if (_isScreenSharing) {
+      // Stop screen share — restore camera track
+      await _screenStream?.dispose();
+      _screenStream = null;
+      if (_savedCameraTrack != null) {
+        await _webRTCService.replaceVideoTrack(_savedCameraTrack!);
+      }
+      setState(() => _isScreenSharing = false);
+      debugPrint('[Meeting] Screen sharing stopped');
+    } else {
+      // Start screen share
+      try {
+        final screenStream =
+            await navigator.mediaDevices.getDisplayMedia({
+          'video': true,
+          'audio': false,
+        });
+
+        // Save current camera track to restore later
+        _savedCameraTrack =
+            _webRTCService.localStream?.getVideoTracks().firstOrNull;
+
+        final screenTrack = screenStream.getVideoTracks().first;
+
+        // When user stops screen share from the system UI
+        screenTrack.onEnded = () {
+          if (_isScreenSharing && mounted) {
+            _toggleScreenShare();
+          }
+        };
+
+        await _webRTCService.replaceVideoTrack(screenTrack);
+        _screenStream = screenStream;
+        setState(() => _isScreenSharing = true);
+        debugPrint('[Meeting] Screen sharing started');
+      } catch (e) {
+        debugPrint('[Meeting] Screen share failed: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..clearSnackBars()
+            ..showSnackBar(
+              const SnackBar(
+                content: Text('Screen sharing is not available'),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+        }
+      }
+    }
+  }
+
+  void _toggleLiveTranscription() {
+    setState(() {
+      _isLiveTranscriptionOn = !_isLiveTranscriptionOn;
+      if (_isLiveTranscriptionOn && _transcriptionEntries.isEmpty) {
+        // Add initial entry
+        _transcriptionEntries.add(TranscriptionEntry(
+          speaker: 'System',
+          text: 'Live transcription started. Captions will appear here.',
+        ));
+      }
+    });
+  }
+
+  /// Adds a transcription entry to the live captions.
+  ///
+  /// Called by speech recognition when a phrase is detected.
+  // ignore: unused_element — used externally by speech recognition integration
+  void addTranscriptionEntry(String speaker, String text) {
+    if (!mounted) return;
+    setState(() {
+      _transcriptionEntries.add(TranscriptionEntry(
+        speaker: speaker,
+        text: text,
+      ));
+    });
+  }
+
   void _openChat() {
     showModalBottomSheet(
       context: context,
@@ -414,11 +521,50 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
                 ),
               ),
               const SizedBox(height: 16),
+              // Screen Share
               ListTile(
                 leading: Icon(
-                  _isTranslationEnabled
-                      ? Icons.translate_rounded
-                      : Icons.translate_rounded,
+                  _isScreenSharing
+                      ? Icons.stop_screen_share_rounded
+                      : Icons.screen_share_rounded,
+                  color: _isScreenSharing
+                      ? Colors.orangeAccent
+                      : Colors.white70,
+                ),
+                title: Text(
+                  _isScreenSharing
+                      ? 'Stop Screen Share'
+                      : 'Share Screen',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _toggleScreenShare();
+                },
+              ),
+              // Live Transcription
+              ListTile(
+                leading: Icon(
+                  Icons.closed_caption_rounded,
+                  color: _isLiveTranscriptionOn
+                      ? Colors.cyanAccent
+                      : Colors.white70,
+                ),
+                title: Text(
+                  _isLiveTranscriptionOn
+                      ? 'Turn Off Captions'
+                      : 'Turn On Captions',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _toggleLiveTranscription();
+                },
+              ),
+              // Translation
+              ListTile(
+                leading: Icon(
+                  Icons.translate_rounded,
                   color: _isTranslationEnabled
                       ? Colors.cyanAccent
                       : Colors.white70,
@@ -489,6 +635,10 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     if (_hasLeftMeeting) return;
     _hasLeftMeeting = true;
     debugPrint('[Meeting] Performing leave cleanup');
+
+    // Stop screen share if active
+    await _screenStream?.dispose();
+    _screenStream = null;
 
     _connectingTimeout?.cancel();
 
@@ -628,6 +778,45 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
               // ── 1. Top bar ─────────────────────────────────────────────────
               _buildTopBar(),
 
+              // ── Screen share indicator ──────────────────────────────────────
+              if (_isScreenSharing)
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  color: Colors.orangeAccent.withValues(alpha: 0.15),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.screen_share_rounded,
+                          color: Colors.orangeAccent, size: 16),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'You are sharing your screen',
+                        style: TextStyle(
+                            color: Colors.orangeAccent, fontSize: 12),
+                      ),
+                      const SizedBox(width: 12),
+                      GestureDetector(
+                        onTap: _toggleScreenShare,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.orangeAccent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Text('Stop',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               // ── 2. Admission banner (host only) ────────────────────────────
               if (_isHost && widget.meeting.admissionControl)
                 AdmissionBanner(meetingDocId: widget.meeting.docId),
@@ -641,6 +830,13 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
                 meetingDocId: widget.meeting.docId,
                 localStream: _webRTCService.localStream,
               ),
+
+              // ── Live Transcription panel ────────────────────────────────────
+              if (_isLiveTranscriptionOn)
+                LiveTranscriptionPanel(
+                  entries: _transcriptionEntries,
+                  onClose: _toggleLiveTranscription,
+                ),
 
               // ── 5. Bottom control bar ──────────────────────────────────────
               _buildBottomControlBar(),

@@ -314,6 +314,22 @@ class WebRTCService {
     }
   }
 
+  /// Replaces the video track being sent to the remote peer.
+  ///
+  /// Used for screen sharing — swaps camera track with display track
+  /// and vice versa without renegotiation.
+  Future<void> replaceVideoTrack(MediaStreamTrack newTrack) async {
+    final senders = await peerConnection?.getSenders();
+    if (senders == null) return;
+    for (final sender in senders) {
+      if (sender.track?.kind == 'video') {
+        await sender.replaceTrack(newTrack);
+        debugPrint('[WebRTC] Video track replaced');
+        return;
+      }
+    }
+  }
+
   /// Cleans up all resources. Safe to call multiple times.
   Future<void> dispose() async {
     if (_disposed) return;
