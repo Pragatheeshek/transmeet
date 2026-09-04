@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:transmeet/core/constants/app_constants.dart';
 import 'package:transmeet/features/translation/models/translation_language.dart';
+import 'package:transmeet/main.dart';
 
 /// Settings screen for TransMeet.
 ///
@@ -137,6 +138,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  String get _themeLabel {
+    final mode = TransMeetApp.themeProvider.themeMode;
+    switch (mode) {
+      case ThemeMode.light:
+        return 'Light';
+      case ThemeMode.dark:
+        return 'Dark';
+      case ThemeMode.system:
+        return 'System';
+    }
+  }
+
+  void _showThemePicker() {
+    final provider = TransMeetApp.themeProvider;
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Choose Theme'),
+        children: [
+          _themeOption(ctx, provider, ThemeMode.system, 'System Default',
+              Icons.brightness_auto_rounded),
+          _themeOption(ctx, provider, ThemeMode.light, 'Light',
+              Icons.light_mode_rounded),
+          _themeOption(ctx, provider, ThemeMode.dark, 'Dark',
+              Icons.dark_mode_rounded),
+        ],
+      ),
+    );
+  }
+
+  Widget _themeOption(BuildContext ctx, dynamic provider, ThemeMode mode,
+      String label, IconData icon) {
+    final isSelected = provider.themeMode == mode;
+    return SimpleDialogOption(
+      onPressed: () {
+        provider.setThemeMode(mode);
+        Navigator.of(ctx).pop();
+        setState(() {}); // rebuild to update subtitle
+      },
+      child: Row(
+        children: [
+          Icon(icon,
+              size: 20,
+              color: isSelected
+                  ? Theme.of(ctx).colorScheme.primary
+                  : Theme.of(ctx).colorScheme.onSurfaceVariant),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color:
+                    isSelected ? Theme.of(ctx).colorScheme.primary : null,
+              ),
+            ),
+          ),
+          if (isSelected)
+            Icon(Icons.check_rounded,
+                size: 18, color: Theme.of(ctx).colorScheme.primary),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -196,6 +262,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
               onTap: _showLanguagePicker,
+            ),
+            const SizedBox(height: 24),
+
+            // ── Theme ─────────────────────────────────────────────────────
+            _SectionHeader(label: 'Appearance'),
+            const SizedBox(height: 8),
+            _SettingsTile(
+              icon: Icons.dark_mode_rounded,
+              title: 'Theme',
+              subtitle: _themeLabel,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_themeLabel,
+                      style: TextStyle(
+                          color: theme.colorScheme.primary, fontSize: 13)),
+                  const SizedBox(width: 4),
+                  Icon(Icons.chevron_right_rounded,
+                      color: theme.colorScheme.onSurfaceVariant, size: 20),
+                ],
+              ),
+              onTap: _showThemePicker,
             ),
             const SizedBox(height: 24),
 

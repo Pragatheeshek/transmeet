@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:transmeet/core/constants/app_constants.dart';
 import 'package:transmeet/core/services/auth_service.dart';
-import 'package:transmeet/features/home/widgets/language_preference_chip.dart';
 import 'package:transmeet/features/home/widgets/meeting_action_card.dart';
 import 'package:transmeet/features/home/widgets/quick_actions_row.dart';
 import 'package:transmeet/features/home/widgets/recent_meetings_section.dart';
@@ -176,18 +175,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     onTap: _openSettings,
                   ),
                 ],
-              ),
-              const SizedBox(height: 28),
-
-              // ── Language preference ───────────────────────────────────────
-              Card(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: const LanguagePreferenceChip(),
-                ),
               ),
               const SizedBox(height: 28),
 

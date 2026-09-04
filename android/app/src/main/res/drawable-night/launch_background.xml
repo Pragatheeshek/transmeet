@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native launch background (dark mode) — matches the dark splash screen #0F172A -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <color android:color="#0F172A" />
+    </item>
+</layer-list>
