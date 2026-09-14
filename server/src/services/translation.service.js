@@ -19,12 +19,17 @@ const MOCK_TRANSLATIONS = {
  * @returns {Promise<{translatedText: string, sourceLanguage: string, targetLanguage: string}>}
  */
 async function translate(text, sourceLanguage, targetLanguage) {
+  const trimmedText = (text || '').trim();
+  if (!trimmedText) {
+    throw new Error('Text is empty after trimming.');
+  }
+
   if (isMockMode()) {
-    console.log(`[Translation Mock] ${sourceLanguage} → ${targetLanguage}: "${text}"`);
+    console.log(`[Translation Mock] ${sourceLanguage} → ${targetLanguage}: "${trimmedText}"`);
     const key = `${sourceLanguage}-${targetLanguage}`;
-    const mockResult = MOCK_TRANSLATIONS[key]?.[text];
+    const mockResult = MOCK_TRANSLATIONS[key]?.[trimmedText];
     return {
-      translatedText: mockResult || `[Mock ${targetLanguage}] ${text}`,
+      translatedText: mockResult || `[Mock ${targetLanguage}] ${trimmedText}`,
       sourceLanguage,
       targetLanguage,
     };
@@ -36,12 +41,22 @@ async function translate(text, sourceLanguage, targetLanguage) {
   }
 
   try {
+    const t1 = Date.now();
     const client = new Translate({ key: apiKey });
 
-    const [result] = await client.translate(text, {
-      from: sourceLanguage,
-      to: targetLanguage,
-    });
+    const options = { to: targetLanguage };
+    // Only set 'from' if it's not 'auto' — let Google auto-detect otherwise
+    if (sourceLanguage && sourceLanguage !== 'auto') {
+      options.from = sourceLanguage;
+    }
+
+    const [result] = await client.translate(trimmedText, options);
+
+    const latency = Date.now() - t1;
+    console.log(
+      `[Translation API] ${sourceLanguage}→${targetLanguage} latency=${latency}ms` +
+      ` "${trimmedText.substring(0, 40)}" → "${(result || '').substring(0, 40)}"`
+    );
 
     return {
       translatedText: result,

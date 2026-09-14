@@ -12,6 +12,7 @@ import 'package:transmeet/features/meeting/models/participant_model.dart';
 import 'package:transmeet/features/meeting/services/meeting_service.dart';
 import 'package:transmeet/features/meeting/services/participant_service.dart';
 import 'package:transmeet/features/meeting/services/webrtc_service.dart';
+import 'package:transmeet/core/services/foreground_service_helper.dart';
 import 'package:transmeet/features/meeting/widgets/admission_banner.dart';
 import 'package:transmeet/features/meeting/widgets/live_transcription_panel.dart';
 import 'package:transmeet/features/meeting/widgets/participant_panel.dart';
@@ -60,11 +61,13 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   bool _isTranslationEnabled = false;
   bool _isScreenSharing = false;
   bool _isLiveTranscriptionOn = false;
+  bool _isPipMode = false;
   String _initError = '';
 
   // ─── Screen share ──────────────────────────────────────────────────────────
   MediaStream? _screenStream;
   MediaStreamTrack? _savedCameraTrack;
+  Timer? _screenShareCheckTimer;
 
   // ─── Transcription ──────────────────────────────────────────────────────────
   final List<TranscriptionEntry> _transcriptionEntries = [];
@@ -87,6 +90,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   bool _phaseAReady = false;
   bool _phaseBReady = false;
   Timer? _connectingTimeout;
+  Timer? _disconnectTimer;
 
   // ─── Meeting timer ──────────────────────────────────────────────────────────
   final Stopwatch _meetingStopwatch = Stopwatch();
@@ -124,6 +128,8 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connectingTimeout?.cancel();
+    _disconnectTimer?.cancel();
+    _screenShareCheckTimer?.cancel();
     _clockTimer?.cancel();
     _meetingStopwatch.stop();
     _meetingStatusSub?.cancel();
@@ -234,6 +240,12 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         setState(() => _phaseBReady = true);
       }
 
+      // Keep call connection alive in background via foreground service
+      ForegroundServiceHelper.startCall(
+        title: widget.meeting.title,
+        text: 'Meeting in progress',
+      );
+
       _maybeStartWebRTC();
     } catch (e) {
       debugPrint('[Meeting] Phase B error: $e');
@@ -266,7 +278,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     debugPrint('[Meeting] Starting WebRTC — isHost=$_isHost');
     setState(() => _phase = _Phase.connecting);
 
-    _connectingTimeout = Timer(const Duration(seconds: 30), () {
+    _connectingTimeout = Timer(const Duration(seconds: 45), () {
       if (mounted && _phase == _Phase.connecting) {
         debugPrint('[Meeting] WebRTC timeout');
         setState(() => _phase = _Phase.failed);
@@ -280,20 +292,33 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     future.catchError((e) {
       debugPrint('[WebRTC] Signaling error: $e');
       _connectingTimeout?.cancel();
+      _disconnectTimer?.cancel();
       if (mounted) setState(() => _phase = _Phase.failed);
     });
   }
 
   void _onWebRTCStateChanged(RTCPeerConnectionState state) {
+    debugPrint('[Meeting] WebRTC peer connection state: $state');
     if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
       _connectingTimeout?.cancel();
+      _disconnectTimer?.cancel();
       if (mounted) setState(() => _phase = _Phase.connected);
-    } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-        state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+    } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
       _connectingTimeout?.cancel();
+      _disconnectTimer?.cancel();
       if (mounted && _phase != _Phase.ended) {
         setState(() => _phase = _Phase.failed);
       }
+    } else if (state ==
+        RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+      // Mobile networks can trigger transient disconnects; wait 5s before failing
+      _disconnectTimer?.cancel();
+      _disconnectTimer = Timer(const Duration(seconds: 5), () {
+        if (mounted && _phase != _Phase.ended && _phase != _Phase.connected) {
+          debugPrint('[Meeting] WebRTC sustained disconnect -> failing');
+          setState(() => _phase = _Phase.failed);
+        }
+      });
     }
   }
 
@@ -306,6 +331,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       debugPrint('[Meeting] Remote left → resetting WebRTC');
       _webrtcInitiated = false;
       _connectingTimeout?.cancel();
+      _disconnectTimer?.cancel();
       _webRTCService.resetConnection().then((_) {
         if (mounted) {
           setState(() {
@@ -401,48 +427,79 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
   Future<void> _toggleScreenShare() async {
     if (_isScreenSharing) {
-      // Stop screen share — restore camera track
+      // ── Stop screen share ──────────────────────────────────────────────────
+      _screenShareCheckTimer?.cancel();
+      _screenShareCheckTimer = null;
+
+      // Stop screen tracks
+      _screenStream?.getTracks().forEach((t) => t.stop());
       await _screenStream?.dispose();
       _screenStream = null;
-      if (_savedCameraTrack != null) {
+
+      // Restore camera track in peer connection if connected
+      if (_savedCameraTrack != null &&
+          _webRTCService.peerConnection != null) {
         await _webRTCService.replaceVideoTrack(_savedCameraTrack!);
       }
-      setState(() => _isScreenSharing = false);
+      _savedCameraTrack = null;
+
+      await ForegroundServiceHelper.stopScreenShare();
+      if (mounted) setState(() => _isScreenSharing = false);
       debugPrint('[Meeting] Screen sharing stopped');
     } else {
-      // Start screen share
+      // ── Start screen share ─────────────────────────────────────────────────
       try {
+        await ForegroundServiceHelper.startScreenShare();
+
         final screenStream =
             await navigator.mediaDevices.getDisplayMedia({
           'video': true,
           'audio': false,
         });
 
-        // Save current camera track to restore later
+        if (screenStream.getVideoTracks().isEmpty) {
+          await screenStream.dispose();
+          await ForegroundServiceHelper.stopScreenShare();
+          throw 'No video track from screen capture';
+        }
+
+        // Save current camera track before replacing
         _savedCameraTrack =
             _webRTCService.localStream?.getVideoTracks().firstOrNull;
 
         final screenTrack = screenStream.getVideoTracks().first;
 
-        // When user stops screen share from the system UI
-        screenTrack.onEnded = () {
-          if (_isScreenSharing && mounted) {
-            _toggleScreenShare();
-          }
-        };
+        // Replace track in peer connection if connected
+        if (_webRTCService.peerConnection != null) {
+          await _webRTCService.replaceVideoTrack(screenTrack);
+        }
 
-        await _webRTCService.replaceVideoTrack(screenTrack);
         _screenStream = screenStream;
-        setState(() => _isScreenSharing = true);
+        if (mounted) setState(() => _isScreenSharing = true);
         debugPrint('[Meeting] Screen sharing started');
+
+        // Poll for track end — onEnded is unreliable on Android
+        _screenShareCheckTimer?.cancel();
+        _screenShareCheckTimer =
+            Timer.periodic(const Duration(seconds: 1), (_) {
+          final tracks = _screenStream?.getVideoTracks();
+          if (tracks == null ||
+              tracks.isEmpty ||
+              !tracks.first.enabled) {
+            if (_isScreenSharing && mounted) {
+              _toggleScreenShare();
+            }
+          }
+        });
       } catch (e) {
+        await ForegroundServiceHelper.stopScreenShare();
         debugPrint('[Meeting] Screen share failed: $e');
         if (mounted) {
           ScaffoldMessenger.of(context)
             ..clearSnackBars()
             ..showSnackBar(
-              const SnackBar(
-                content: Text('Screen sharing is not available'),
+              SnackBar(
+                content: Text('Screen sharing failed: $e'),
                 behavior: SnackBarBehavior.floating,
               ),
             );
@@ -637,10 +694,14 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     debugPrint('[Meeting] Performing leave cleanup');
 
     // Stop screen share if active
+    _screenShareCheckTimer?.cancel();
+    _screenShareCheckTimer = null;
+    _screenStream?.getTracks().forEach((t) => t.stop());
     await _screenStream?.dispose();
     _screenStream = null;
 
     _connectingTimeout?.cancel();
+    _disconnectTimer?.cancel();
 
     await _participantsSub?.cancel();
     await _connectionStateSub?.cancel();
@@ -663,6 +724,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
     await _participantService.leaveMeeting(widget.meeting.docId);
     await _webRTCService.dispose();
+    await ForegroundServiceHelper.stopService();
 
     debugPrint('[Meeting] Leave cleanup complete');
   }
@@ -726,15 +788,21 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     }
   }
 
-  void _retryWebRTC() {
+  void _retryWebRTC() async {
+    _connectingTimeout?.cancel();
+    _disconnectTimer?.cancel();
     setState(() {
       _webrtcInitiated = false;
       _phase = _Phase.waitingForPeer;
       _remoteStream = null;
     });
-    _webRTCService.resetConnection().then((_) {
-      if (mounted) _maybeStartWebRTC();
-    });
+    try {
+      await _webRTCService.cleanupSignaling(widget.meeting.docId);
+    } catch (e) {
+      debugPrint('[Meeting] Error cleaning up signaling on retry: $e');
+    }
+    await _webRTCService.resetConnection();
+    if (mounted) _maybeStartWebRTC();
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -828,7 +896,8 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
               TranslationOverlay(
                 isEnabled: _isTranslationEnabled,
                 meetingDocId: widget.meeting.docId,
-                localStream: _webRTCService.localStream,
+                onMuteRemoteAudio: (mute) =>
+                    _webRTCService.muteRemoteAudio(mute),
               ),
 
               // ── Live Transcription panel ────────────────────────────────────
@@ -900,6 +969,21 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
           ),
+          // Layout toggle (Grid vs PiP)
+          if (_phase == _Phase.connected && _remoteStream != null)
+            IconButton(
+              icon: Icon(
+                _isPipMode
+                    ? Icons.grid_view_rounded
+                    : Icons.picture_in_picture_alt_rounded,
+                color: Colors.white70,
+                size: 20,
+              ),
+              tooltip: _isPipMode ? 'Switch to Grid View' : 'Switch to PiP View',
+              onPressed: () => setState(() => _isPipMode = !_isPipMode),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            ),
           // Participants
           IconButton(
             icon: const Icon(Icons.people_outline_rounded,
@@ -961,7 +1045,9 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   /// When alone or connecting: shows local camera full-size with state chip.
   Widget _buildLocalVideoWithOverlay() {
     final localStream = _webRTCService.localStream;
-    final cameraAvailable = localStream != null && !_isCameraOff;
+    // When screen sharing, show the screen stream instead of camera
+    final displayStream = _isScreenSharing ? _screenStream : localStream;
+    final hasVideo = displayStream != null && (!_isCameraOff || _isScreenSharing);
 
     return Container(
       margin: const EdgeInsets.all(8),
@@ -973,12 +1059,14 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // ── Local video / avatar ─────────────────────────────────────────────
-          if (cameraAvailable)
+          // ── Local video / screen share / avatar ──────────────────────────────
+          if (hasVideo)
             WebRTCVideoView(
-              stream: localStream,
-              mirror: true,
-              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              stream: displayStream,
+              mirror: !_isScreenSharing, // don't mirror screen share
+              objectFit: _isScreenSharing
+                  ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
+                  : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
             )
           else
             _buildAvatarPlaceholder(_myInitial, _myDisplayName, large: true),
@@ -1014,114 +1102,188 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     );
   }
 
-  /// When connected: remote in large area, local in small strip at the bottom.
+  /// When connected:
+  /// - When _isPipMode is false (default): 50/50 vertical split grid (equal height).
+  /// - When _isPipMode is true: Fullscreen remote with floating draggable/corner PiP card.
   Widget _buildConnectedGrid() {
     final myUid = FirebaseAuth.instance.currentUser?.uid;
     final remote = _participants.where((p) => p.uid != myUid).firstOrNull;
     final remoteName = remote?.displayName ?? 'Participant';
+    final remoteInitial =
+        remoteName.isNotEmpty ? remoteName[0].toUpperCase() : '?';
+    final remoteMicOn = remote?.isMicOn ?? true;
+    final remoteCameraOff = !(remote?.isCameraOn ?? true);
 
-    return Column(
-      children: [
-        // ── Main video: remote participant ──────────────────────────────────────
-        Expanded(
-          flex: 4,
-          child: Container(
-            margin: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1A2E),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                WebRTCVideoView(
-                  stream: _remoteStream,
-                  objectFit:
-                      RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  placeholderLabel: remoteName,
-                ),
-                // Name + mic status
-                Positioned(
-                  left: 12,
-                  bottom: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
+    if (_isPipMode) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          // Remote full-screen
+          _buildVideoTile(
+            stream: _remoteStream,
+            name: remoteName,
+            isMicOn: remoteMicOn,
+            isCameraOff: remoteCameraOff,
+            initial: remoteInitial,
+            mirror: false,
+            objectFit: _isScreenSharing
+                ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
+                : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+          ),
+
+          // Floating local PiP tile
+          Positioned(
+            right: 16,
+            bottom: 16,
+            width: 110,
+            height: 155,
+            child: GestureDetector(
+              onTap: () => setState(() => _isPipMode = false),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: const [
+                    BoxShadow(
                       color: Colors.black54,
-                      borderRadius: BorderRadius.circular(8),
+                      blurRadius: 10,
+                      spreadRadius: 2,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(remoteName,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 12)),
-                        if (remote != null) ...[
-                          const SizedBox(width: 6),
-                          Icon(
-                            remote.isMicOn
-                                ? Icons.mic_rounded
-                                : Icons.mic_off_rounded,
-                            color: remote.isMicOn
-                                ? Colors.white54
-                                : Colors.redAccent,
-                            size: 14,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
+                  ],
+                  border: Border.all(color: Colors.white24, width: 1.5),
                 ),
-              ],
+                clipBehavior: Clip.antiAlias,
+                child: _buildVideoTile(
+                  stream: _isScreenSharing
+                      ? _screenStream
+                      : _webRTCService.localStream,
+                  name: _isScreenSharing ? 'Your Screen' : 'You',
+                  isMicOn: !_isMicMuted,
+                  isCameraOff: _isScreenSharing ? false : _isCameraOff,
+                  initial: _myInitial,
+                  mirror: !_isScreenSharing,
+                  isCompact: true,
+                ),
+              ),
             ),
           ),
-        ),
+        ],
+      );
+    }
 
-        // ── Bottom row: local participant (you) ────────────────────────────────
-        SizedBox(
-          height: 120,
-          child: Container(
-            margin: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1A2E),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (!_isCameraOff && _webRTCService.localStream != null)
-                  WebRTCVideoView(
-                    stream: _webRTCService.localStream,
-                    mirror: true,
-                    objectFit:
-                        RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  )
-                else
-                  _buildAvatarPlaceholder(_myInitial, _myDisplayName,
-                      large: false),
-                Positioned(
-                  left: 8,
-                  bottom: 6,
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text('You',
-                        style:
-                            TextStyle(color: Colors.white70, fontSize: 10)),
-                  ),
-                ),
-              ],
+    // Default: Clean 50/50 Balanced Vertical Split Grid View
+    return Padding(
+      padding: const EdgeInsets.all(6),
+      child: Column(
+        children: [
+          // ── Remote participant (Top 50%) ──────────────────────────────────
+          Expanded(
+            child: _buildVideoTile(
+              stream: _remoteStream,
+              name: remoteName,
+              isMicOn: remoteMicOn,
+              isCameraOff: remoteCameraOff,
+              initial: remoteInitial,
+              mirror: false,
+              objectFit: _isScreenSharing
+                  ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
+                  : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
             ),
           ),
+          const SizedBox(height: 6),
+          // ── Local participant (Bottom 50%) ────────────────────────────────
+          Expanded(
+            child: _buildVideoTile(
+              stream: _isScreenSharing
+                  ? _screenStream
+                  : _webRTCService.localStream,
+              name: _isScreenSharing ? 'Your Screen' : 'You',
+              isMicOn: !_isMicMuted,
+              isCameraOff: _isScreenSharing ? false : _isCameraOff,
+              initial: _myInitial,
+              mirror: !_isScreenSharing,
+              objectFit: _isScreenSharing
+                  ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
+                  : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Reusable card tile for a participant's stream with name pill and mic status.
+  Widget _buildVideoTile({
+    required MediaStream? stream,
+    required String name,
+    required bool isMicOn,
+    required bool isCameraOff,
+    required String initial,
+    required bool mirror,
+    RTCVideoViewObjectFit objectFit =
+        RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+    bool isCompact = false,
+  }) {
+    final hasVideo = stream != null && !isCameraOff;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF161626),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.08),
+          width: 1,
         ),
-      ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (hasVideo)
+            WebRTCVideoView(
+              stream: stream,
+              mirror: mirror,
+              objectFit: objectFit,
+              placeholderLabel: name,
+            )
+          else
+            _buildAvatarPlaceholder(initial, name, large: !isCompact),
+
+          // Name pill + mic status
+          Positioned(
+            left: isCompact ? 6 : 12,
+            bottom: isCompact ? 6 : 12,
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: isCompact ? 6 : 10,
+                vertical: isCompact ? 3 : 5,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.65),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: isCompact ? 10 : 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Icon(
+                    isMicOn ? Icons.mic_rounded : Icons.mic_off_rounded,
+                    color: isMicOn ? Colors.greenAccent : Colors.redAccent,
+                    size: isCompact ? 11 : 14,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

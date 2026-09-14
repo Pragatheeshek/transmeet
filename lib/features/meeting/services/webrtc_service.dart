@@ -29,18 +29,58 @@ class WebRTCService {
   StreamSubscription<QuerySnapshot>? _candidateSubscription;
   bool _disposed = false;
 
+  /// Tracks whether the remote description has been set on the peer connection.
+  ///
+  /// This replaces the buggy `peerConnection?.getRemoteDescription() == null`
+  /// check — that method returns a Future, so comparing it to null was always
+  /// false, which prevented the host from ever setting the answer.
+  bool _remoteDescriptionSet = false;
+
+  /// Buffers ICE candidates that arrive before the remote description is set.
+  ///
+  /// Without buffering, candidates received before setRemoteDescription()
+  /// are silently discarded by WebRTC, causing connectivity checks to fail.
+  final List<RTCIceCandidate> _pendingCandidates = [];
+
   /// Whether the local stream has been successfully initialized.
   bool get isReady => localStream != null && !_disposed;
 
-  /// STUN servers configuration
+  /// ICE servers configuration — includes both STUN and TURN servers.
+  ///
+  /// STUN-only works when both peers have a direct route (open/cone NAT).
+  /// Mobile networks (4G/5G) almost always use symmetric NAT, which requires
+  /// a TURN relay server as fallback. Without TURN, connections between
+  /// mobile devices will fail consistently.
   final Map<String, dynamic> configuration = {
     'iceServers': [
       {
         'urls': [
           'stun:stun1.l.google.com:19302',
-          'stun:stun2.l.google.com:19302'
+          'stun:stun2.l.google.com:19302',
         ]
-      }
+      },
+      // Free TURN servers from Open Relay Project (metered.ca)
+      // These provide relay capability for NAT traversal on mobile networks.
+      {
+        'urls': 'turn:a.relay.metered.ca:80',
+        'username': 'e8dd65b92f070a50a37e811a',
+        'credential': '5sJJpEbOmOFErEuh',
+      },
+      {
+        'urls': 'turn:a.relay.metered.ca:80?transport=tcp',
+        'username': 'e8dd65b92f070a50a37e811a',
+        'credential': '5sJJpEbOmOFErEuh',
+      },
+      {
+        'urls': 'turn:a.relay.metered.ca:443',
+        'username': 'e8dd65b92f070a50a37e811a',
+        'credential': '5sJJpEbOmOFErEuh',
+      },
+      {
+        'urls': 'turns:a.relay.metered.ca:443?transport=tcp',
+        'username': 'e8dd65b92f070a50a37e811a',
+        'credential': '5sJJpEbOmOFErEuh',
+      },
     ]
   };
 
@@ -70,6 +110,11 @@ class WebRTCService {
   /// Creates a peer connection and adds local tracks.
   Future<void> _createPeerConnection() async {
     debugPrint('[WebRTC] Creating PeerConnection');
+
+    // Reset state for new connection
+    _remoteDescriptionSet = false;
+    _pendingCandidates.clear();
+
     peerConnection = await createPeerConnection(configuration, offerSdpConstraints);
 
     peerConnection?.onTrack = (RTCTrackEvent event) {
@@ -93,10 +138,45 @@ class WebRTCService {
       debugPrint('[WebRTC] ICE connection state: $state');
     };
 
+    peerConnection?.onIceGatheringState = (RTCIceGatheringState state) {
+      debugPrint('[WebRTC] ICE gathering state: $state');
+    };
+
+    peerConnection?.onSignalingState = (RTCSignalingState state) {
+      debugPrint('[WebRTC] Signaling state: $state');
+    };
+
     localStream?.getTracks().forEach((track) {
       peerConnection?.addTrack(track, localStream!);
     });
     debugPrint('[WebRTC] Local tracks added to PeerConnection');
+  }
+
+  /// Adds buffered ICE candidates after the remote description has been set.
+  Future<void> _drainPendingCandidates() async {
+    debugPrint('[WebRTC] Draining ${_pendingCandidates.length} buffered ICE candidates');
+    for (final candidate in _pendingCandidates) {
+      try {
+        await peerConnection?.addCandidate(candidate);
+      } catch (e) {
+        debugPrint('[WebRTC] Failed to add buffered candidate: $e');
+      }
+    }
+    _pendingCandidates.clear();
+  }
+
+  /// Adds an ICE candidate, buffering it if the remote description isn't set yet.
+  Future<void> _addIceCandidate(RTCIceCandidate candidate) async {
+    if (_remoteDescriptionSet) {
+      try {
+        await peerConnection?.addCandidate(candidate);
+      } catch (e) {
+        debugPrint('[WebRTC] Failed to add ICE candidate: $e');
+      }
+    } else {
+      debugPrint('[WebRTC] Buffering ICE candidate (remote desc not set yet)');
+      _pendingCandidates.add(candidate);
+    }
   }
 
   /// Deletes stale signaling data (offer, answer, ICE candidates) from Firestore.
@@ -155,6 +235,9 @@ class WebRTCService {
     await _remoteStream?.dispose();
     _remoteStream = null;
 
+    _remoteDescriptionSet = false;
+    _pendingCandidates.clear();
+
     await peerConnection?.close();
     peerConnection = null;
 
@@ -194,14 +277,22 @@ class WebRTCService {
     _roomSubscription = roomRef.snapshots().listen((snapshot) async {
       if (snapshot.exists) {
         final data = snapshot.data() as Map<String, dynamic>;
-        if (peerConnection?.getRemoteDescription() == null && data['answer'] != null) {
+        if (!_remoteDescriptionSet && data['answer'] != null) {
           debugPrint('[WebRTC] Answer received from Firestore');
-          var answer = RTCSessionDescription(
-            data['answer']['sdp'],
-            data['answer']['type'],
-          );
-          await peerConnection?.setRemoteDescription(answer);
-          debugPrint('[WebRTC] Remote description (answer) set');
+          try {
+            var answer = RTCSessionDescription(
+              data['answer']['sdp'],
+              data['answer']['type'],
+            );
+            await peerConnection?.setRemoteDescription(answer);
+            _remoteDescriptionSet = true;
+            debugPrint('[WebRTC] Remote description (answer) set');
+
+            // Drain any ICE candidates that arrived before the answer.
+            await _drainPendingCandidates();
+          } catch (e) {
+            debugPrint('[WebRTC] Failed to set remote description (answer): $e');
+          }
         }
       }
     });
@@ -212,7 +303,7 @@ class WebRTCService {
         if (change.type == DocumentChangeType.added) {
           debugPrint('[WebRTC] Callee ICE candidate received');
           final data = change.doc.data() as Map<String, dynamic>;
-          peerConnection?.addCandidate(
+          _addIceCandidate(
             RTCIceCandidate(
               data['candidate'],
               data['sdpMid'],
@@ -247,21 +338,29 @@ class WebRTCService {
     _roomSubscription = roomRef.snapshots().listen((snapshot) async {
       if (snapshot.exists) {
         final data = snapshot.data() as Map<String, dynamic>;
-        if (peerConnection?.getRemoteDescription() == null && data['offer'] != null) {
+        if (!_remoteDescriptionSet && data['offer'] != null) {
           debugPrint('[WebRTC] Offer received from Firestore');
-          var offer = RTCSessionDescription(
-            data['offer']['sdp'],
-            data['offer']['type'],
-          );
-          await peerConnection?.setRemoteDescription(offer);
-          debugPrint('[WebRTC] Remote description (offer) set');
+          try {
+            var offer = RTCSessionDescription(
+              data['offer']['sdp'],
+              data['offer']['type'],
+            );
+            await peerConnection?.setRemoteDescription(offer);
+            _remoteDescriptionSet = true;
+            debugPrint('[WebRTC] Remote description (offer) set');
 
-          var answer = await peerConnection!.createAnswer();
-          await peerConnection!.setLocalDescription(answer);
-          debugPrint('[WebRTC] Answer created and set as local description');
+            // Drain any ICE candidates that arrived before the offer.
+            await _drainPendingCandidates();
 
-          await roomRef.update({'answer': answer.toMap()});
-          debugPrint('[WebRTC] Answer written to Firestore');
+            var answer = await peerConnection!.createAnswer();
+            await peerConnection!.setLocalDescription(answer);
+            debugPrint('[WebRTC] Answer created and set as local description');
+
+            await roomRef.update({'answer': answer.toMap()});
+            debugPrint('[WebRTC] Answer written to Firestore');
+          } catch (e) {
+            debugPrint('[WebRTC] Failed to process offer: $e');
+          }
         }
       }
     });
@@ -272,7 +371,7 @@ class WebRTCService {
         if (change.type == DocumentChangeType.added) {
           debugPrint('[WebRTC] Caller ICE candidate received');
           final data = change.doc.data() as Map<String, dynamic>;
-          peerConnection?.addCandidate(
+          _addIceCandidate(
             RTCIceCandidate(
               data['candidate'],
               data['sdpMid'],
@@ -330,6 +429,21 @@ class WebRTCService {
     }
   }
 
+  /// Mutes or unmutes the remote audio track.
+  ///
+  /// When translation is enabled, the remote audio is muted so the user
+  /// only hears the synthesized translated speech (via just_audio).
+  /// When translation is disabled, the remote audio is restored.
+  void muteRemoteAudio(bool mute) {
+    if (_remoteStream == null) return;
+    final audioTracks = _remoteStream!.getAudioTracks();
+    for (final track in audioTracks) {
+      track.enabled = !mute;
+      debugPrint('[WebRTC] Remote audio track ${mute ? "muted" : "unmuted"}');
+    }
+  }
+
+
   /// Cleans up all resources. Safe to call multiple times.
   Future<void> dispose() async {
     if (_disposed) return;
@@ -342,6 +456,9 @@ class WebRTCService {
 
     await _remoteStream?.dispose();
     _remoteStream = null;
+
+    _remoteDescriptionSet = false;
+    _pendingCandidates.clear();
 
     await peerConnection?.close();
     peerConnection = null;

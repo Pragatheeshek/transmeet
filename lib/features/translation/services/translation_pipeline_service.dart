@@ -55,13 +55,19 @@ class TranslationPipelineService {
   }) async {
     if (_isDisposed) return;
 
+    final t1 = DateTime.now();
+
     try {
       // Step 1: Transcribe
       statusNotifier.value = TranslationStatus.transcribing;
+      final t2 = DateTime.now();
       final transcription = await _apiClient.transcribe(audioBytes);
+      final t3 = DateTime.now();
       final text = transcription['text'] as String? ?? '';
       final detectedLanguage =
           sourceLanguageCode ?? (transcription['language'] as String? ?? 'en');
+
+      debugPrint('[Pipeline] STT: ${t3.difference(t2).inMilliseconds}ms');
 
       if (text.trim().isEmpty) {
         statusNotifier.value = TranslationStatus.idle;
@@ -85,12 +91,16 @@ class TranslationPipelineService {
 
       // Step 2: Translate
       statusNotifier.value = TranslationStatus.translating;
+      final t4 = DateTime.now();
       final translation = await _apiClient.translate(
         text: text,
         sourceLanguage: detectedLanguage,
         targetLanguage: targetLanguageCode,
       );
+      final t5 = DateTime.now();
       final translatedText = translation['translatedText'] as String? ?? '';
+
+      debugPrint('[Pipeline] Translation: ${t5.difference(t4).inMilliseconds}ms');
 
       final result = TranslationResult.fromTranscriptionAndTranslation(
         originalText: text,
@@ -102,17 +112,24 @@ class TranslationPipelineService {
 
       // Step 3: Synthesize
       statusNotifier.value = TranslationStatus.synthesizing;
+      final t6 = DateTime.now();
       final ttsResponse = await _apiClient.synthesize(
         text: translatedText,
         languageCode: targetLanguageCode,
       );
+      final t7 = DateTime.now();
       final audioContent = ttsResponse['audioContent'] as String? ?? '';
+
+      debugPrint('[Pipeline] TTS: ${t7.difference(t6).inMilliseconds}ms');
 
       if (audioContent.isNotEmpty) {
         // Step 4: Play
         statusNotifier.value = TranslationStatus.playing;
         await _playBase64Audio(audioContent);
       }
+
+      final totalLatency = DateTime.now().difference(t1).inMilliseconds;
+      debugPrint('[Pipeline] Total end-to-end: ${totalLatency}ms');
 
       statusNotifier.value = TranslationStatus.completed;
       await Future.delayed(const Duration(seconds: 2));

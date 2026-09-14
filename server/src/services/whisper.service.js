@@ -33,12 +33,19 @@ async function transcribe(audioBuffer, originalName = 'audio.wav') {
   try {
     fs.writeFileSync(tempPath, audioBuffer);
 
+    const t1 = Date.now();
     const openai = new OpenAI({ apiKey });
     const response = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempPath),
       model: 'whisper-1',
       response_format: 'verbose_json',
     });
+
+    const latency = Date.now() - t1;
+    console.log(
+      `[Whisper API] latency=${latency}ms lang=${response.language || 'unknown'}` +
+      ` text="${(response.text || '').substring(0, 80)}"`
+    );
 
     return {
       text: response.text || '',

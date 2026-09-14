@@ -13,7 +13,10 @@ const VOICE_MAP = {
   'es': { languageCode: 'es-ES', name: 'es-ES-Standard-A' },
   'fr': { languageCode: 'fr-FR', name: 'fr-FR-Standard-A' },
   'de': { languageCode: 'de-DE', name: 'de-DE-Standard-A' },
+  'it': { languageCode: 'it-IT', name: 'it-IT-Standard-A' },
+  'pt': { languageCode: 'pt-BR', name: 'pt-BR-Standard-A' },
   'ja': { languageCode: 'ja-JP', name: 'ja-JP-Standard-A' },
+  'zh': { languageCode: 'cmn-CN', name: 'cmn-CN-Standard-A' },
 };
 
 // A minimal valid WAV file (44 bytes header + ~100ms silence at 16kHz mono)
@@ -75,6 +78,7 @@ async function synthesize(text, languageCode) {
   }
 
   try {
+    const t1 = Date.now();
     const response = await axios.post(
       `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
       {
@@ -91,6 +95,9 @@ async function synthesize(text, languageCode) {
         timeout: 30000,
       }
     );
+
+    const latency = Date.now() - t1;
+    console.log(`[TTS API] lang=${languageCode} latency=${latency}ms textLen=${text.length}`);
 
     return {
       audioContent: response.data.audioContent,

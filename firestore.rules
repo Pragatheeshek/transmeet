@@ -44,6 +44,14 @@ service cloud.firestore {
         allow create: if request.auth != null
                       && request.resource.data.senderId == request.auth.uid;
       }
+
+      // Translation transcriptions subcollection
+      // Participants broadcast their speech transcriptions here for real-time translation.
+      match /transcriptions/{transcriptionId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null
+                      && request.resource.data.speakerUid == request.auth.uid;
+      }
     }
 
     // =========================================================================

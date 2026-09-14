@@ -60,6 +60,8 @@ class AppConstants {
     'French',
     'German',
     'Spanish',
+    'Italian',
+    'Portuguese',
     'Japanese',
     'Chinese',
   ];
@@ -134,7 +136,7 @@ class AppConstants {
 
   /// Base URL for the Node.js translation backend.
   /// During development, use your machine's LAN IP (e.g. http://192.168.x.x:3001).
-  static const String backendBaseUrl = 'http://10.0.2.2:3001';
+  static const String backendBaseUrl = 'http://10.110.216.27:3001';
 
   // Translation UI strings
   static const String translationEnabled = 'Translation: ON';

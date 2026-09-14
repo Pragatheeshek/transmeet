@@ -22,7 +22,10 @@ class TranslationLanguage {
     TranslationLanguage(code: 'es', name: 'Spanish'),
     TranslationLanguage(code: 'fr', name: 'French'),
     TranslationLanguage(code: 'de', name: 'German'),
+    TranslationLanguage(code: 'it', name: 'Italian'),
+    TranslationLanguage(code: 'pt', name: 'Portuguese'),
     TranslationLanguage(code: 'ja', name: 'Japanese'),
+    TranslationLanguage(code: 'zh', name: 'Chinese'),
   ];
 
   /// Looks up a [TranslationLanguage] by its code.
