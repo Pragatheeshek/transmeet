@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -141,7 +142,7 @@ class RealtimeTranslationEngine {
         if (data == null) continue;
 
         final speakerUid = data['speakerUid'] as String? ?? '';
-        if (speakerUid == myUid) continue; // Skip own speech
+        // if (speakerUid == myUid) continue; // Skip own speech (COMMENTED OUT FOR TESTING)
 
         final text = data['text'] as String? ?? '';
         final detectedLanguage = data['detectedLanguage'] as String? ?? 'en';
@@ -299,9 +300,46 @@ class RealtimeTranslationEngine {
   /// Translates text using the Node.js backend (official Google Cloud
   /// Translation API). API keys stay on the server.
   ///
-  /// Latency: ~200–500ms per call.
+  /// Includes 2 automatic retries with a 1-second backoff for transient
+  /// network/timeout failures. The 45-second timeout accommodates the
+  /// Google Translate API cold-start which can take 15–20s.
   Future<String> _translateViaBackend(
       String text, String from, String to) async {
+    const maxAttempts = 3;
+    const retryDelay = Duration(seconds: 1);
+    const requestTimeout = Duration(seconds: 45);
+
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await _translateViaBackendSingle(
+            text, from, to, requestTimeout);
+      } on TimeoutException {
+        debugPrint('[TranslationEngine] Timeout on attempt $attempt/$maxAttempts');
+        if (attempt == maxAttempts) {
+          throw 'Connection slow — translation timed out. Please check your network.';
+        }
+        await Future.delayed(retryDelay);
+      } on SocketException catch (e) {
+        debugPrint('[TranslationEngine] Network error on attempt $attempt/$maxAttempts: $e');
+        if (attempt == maxAttempts) {
+          throw 'Network error — cannot reach translation server.';
+        }
+        await Future.delayed(retryDelay);
+      } on http.ClientException catch (e) {
+        debugPrint('[TranslationEngine] Client error on attempt $attempt/$maxAttempts: $e');
+        if (attempt == maxAttempts) {
+          throw 'Network error — cannot reach translation server.';
+        }
+        await Future.delayed(retryDelay);
+      }
+    }
+    // Unreachable, but satisfies the compiler.
+    throw 'Translation failed after $maxAttempts attempts.';
+  }
+
+  /// Single translation attempt.
+  Future<String> _translateViaBackendSingle(
+      String text, String from, String to, Duration timeout) async {
     final url = Uri.parse('$_backendBaseUrl/api/translation/translate');
 
     final response = await _httpClient
@@ -314,7 +352,7 @@ class RealtimeTranslationEngine {
             'targetLanguage': to,
           }),
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(timeout);
 
     if (response.statusCode == 200) {
       final data = json.decode(response.body) as Map<String, dynamic>;

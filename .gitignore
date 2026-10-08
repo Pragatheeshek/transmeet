@@ -47,3 +47,6 @@ app.*.map.json
 # Server (Node.js backend)
 server/node_modules/
 server/.env
+
+# Environment variables (API keys)
+.env

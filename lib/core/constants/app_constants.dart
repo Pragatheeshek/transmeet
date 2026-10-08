@@ -135,7 +135,8 @@ class AppConstants {
   // ---------------------------------------------------------------------------
 
   /// Base URL for the Node.js translation backend.
-  /// During development, use your machine's LAN IP (e.g. http://192.168.x.x:3001).
+  /// Pointing to the computer's Wi-Fi IP address so the physical mobile device can connect.
+  /// Note: Both the mobile device and this computer must be on the same Wi-Fi network.
   static const String backendBaseUrl = 'http://10.110.216.27:3001';
 
   // Translation UI strings

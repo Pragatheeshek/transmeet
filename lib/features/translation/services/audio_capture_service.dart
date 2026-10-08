@@ -1,28 +1,44 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:speech_to_text/speech_recognition_result.dart';
-import 'package:speech_to_text/speech_to_text.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
-/// Real-time speech capture using on-device speech recognition.
+import 'package:transmeet/features/translation/services/translation_api_client.dart';
+
+/// Real-time speech capture using OpenAI Whisper API.
 ///
-/// Uses the `speech_to_text` package which runs natively on Android/iOS
-/// for near-instant speech recognition — no file recording, no Whisper API,
-/// no network latency for the STT step.
+/// Records audio in short segments using the `record` package, sends each
+/// segment to the Whisper API for transcription, then broadcasts the result
+/// to Firestore for other meeting participants.
 ///
 /// Flow:
-///   Mic → On-device SR (real-time) → Firestore broadcast
+///   Mic → Record segment → Whisper API → Firestore broadcast
 ///
-/// Latency: ~0.3–0.5s (on-device recognition)
+/// Latency: ~1–3s per segment (recording + Whisper round-trip)
+///
+/// ## Segment Strategy
+///
+/// Records 5-second segments back-to-back. Each segment is encoded as AAC
+/// (M4A container) which keeps file size small (~40–80 KB per 5s segment)
+/// and is natively supported by Whisper.
+///
+/// ## Why file-based recording (not streaming)?
+///
+/// The `record` package's `startStream()` only supports `pcm16bits` and
+/// `opus` encoders for streaming on Android. WAV streaming is NOT supported
+/// and throws `PlatformException`. File-based recording with AAC avoids
+/// this entirely and produces compact files that Whisper accepts natively.
 class AudioCaptureService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final SpeechToText _speech = SpeechToText();
+  final TranslationApiClient _apiClient = TranslationApiClient();
+  final AudioRecorder _recorder = AudioRecorder();
 
   bool _isRunning = false;
   bool _isDisposed = false;
-  bool _isInitialized = false;
 
   /// Whether the capture is currently active.
   bool get isRunning => _isRunning;
@@ -40,6 +56,13 @@ class AudioCaptureService {
   String _meetingId = '';
   String _lastBroadcastText = '';
 
+  /// Duration of each recording segment.
+  static const Duration _segmentDuration = Duration(seconds: 5);
+
+  /// Startup delay to let WebRTC's audio session settle before
+  /// opening a second mic via the recorder.
+  static const Duration _startupDelay = Duration(milliseconds: 1500);
+
   /// Starts real-time speech capture and Firestore broadcasting.
   Future<void> start({required String meetingId}) async {
     if (_isRunning || _isDisposed) return;
@@ -47,103 +70,168 @@ class AudioCaptureService {
     _isRunning = true;
     _lastBroadcastText = '';
 
-    debugPrint('[AudioCapture] Starting real-time speech capture');
+    debugPrint('[AudioCapture] Starting Whisper-based speech capture');
+
+    // Check backend health with retries — the first HTTP call on Android
+    // can be slow (DNS, cleartext policy init, TCP handshake).
+    bool isHealthy = false;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      isHealthy = await _apiClient.isHealthy();
+      if (isHealthy) break;
+      debugPrint('[AudioCapture] Health check attempt $attempt/3 failed');
+      if (attempt < 3) {
+        await Future.delayed(const Duration(seconds: 3));
+        if (!_isRunning || _isDisposed) return;
+      }
+    }
+    if (!isHealthy) {
+      _errorController.add(
+          'Translation backend is unreachable. Please check your connection.');
+      _isRunning = false;
+      return;
+    }
+
+    // Check microphone permission
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) {
+      _errorController.add('Microphone permission denied.');
+      _isRunning = false;
+      return;
+    }
+
+    // Give WebRTC's getUserMedia time to fully initialize the audio
+    // session. Starting recording too early on Android can cause
+    // conflicts with the audio focus.
+    debugPrint('[AudioCapture] Waiting ${_startupDelay.inMilliseconds}ms '
+        'for WebRTC audio session to settle...');
+    await Future.delayed(_startupDelay);
+
+    if (!_isRunning || _isDisposed) return;
+
+    // Start the record-transcribe loop
+    _recordLoop();
+  }
+
+  /// Continuously records audio segments to temp files and sends them
+  /// to Whisper.
+  ///
+  /// Uses file-based recording (`_recorder.start()`) with the AAC encoder
+  /// instead of streaming, because `startStream()` does NOT support WAV
+  /// on Android and throws a PlatformException.
+  Future<void> _recordLoop() async {
+    // Get a temp directory once — reuse across segments
+    final tempDir = await getTemporaryDirectory();
+    int segmentIndex = 0;
+
+    while (_isRunning && !_isDisposed) {
+      final segmentPath =
+          '${tempDir.path}/transmeet_segment_${segmentIndex++}.m4a';
+
+      try {
+        // ── Record to file ────────────────────────────────────────────────
+        // Stop any existing recording first (defensive — avoids
+        // 'already recording' exception on some Android devices).
+        if (await _recorder.isRecording()) {
+          await _recorder.stop();
+        }
+
+        await _recorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            sampleRate: 16000,
+            numChannels: 1,
+            bitRate: 128000,
+          ),
+          path: segmentPath,
+        );
+
+        // Wait for the segment duration
+        await Future.delayed(_segmentDuration);
+
+        // Stop recording — returns the file path (or null on error)
+        final resultPath = await _recorder.stop();
+
+        if (!_isRunning || _isDisposed) break;
+
+        // ── Read the recorded file ────────────────────────────────────────
+        final file = File(resultPath ?? segmentPath);
+        if (!await file.exists()) {
+          debugPrint('[AudioCapture] Segment file not found, skipping');
+          continue;
+        }
+
+        final audioBytes = await file.readAsBytes();
+
+        // Clean up temp file immediately
+        try {
+          await file.delete();
+        } catch (_) {}
+
+        // Skip if too little audio was captured (likely silence/noise)
+        if (audioBytes.length < 1000) {
+          debugPrint(
+              '[AudioCapture] Segment too short (${audioBytes.length} bytes), skipping');
+          continue;
+        }
+
+        debugPrint(
+            '[AudioCapture] Recorded segment: ${audioBytes.length} bytes');
+
+        // Send to Whisper in the background (don't block the next segment)
+        _transcribeAndBroadcast(audioBytes);
+      } catch (e) {
+        debugPrint('[AudioCapture] Recording error: $e');
+        if (!_isDisposed) {
+          _errorController.add('Recording error: $e');
+        }
+        // Wait before retrying
+        await Future.delayed(const Duration(seconds: 2));
+      }
+    }
+  }
+
+  /// Sends audio to the backend for transcription and broadcasts the result to Firestore.
+  Future<void> _transcribeAndBroadcast(Uint8List audioBytes) async {
+    if (!_isRunning || _isDisposed) return;
 
     try {
-      if (!_isInitialized) {
-        _isInitialized = await _speech.initialize(
-          onStatus: _onSpeechStatus,
-          onError: (error) {
-            debugPrint('[AudioCapture] Speech error: ${error.errorMsg}');
-            // These errors are normal operating behavior (silence, no speech
-            // detected, or timeout). They are NOT failures — just the speech
-            // recognizer saying "I didn't hear anything." Don't show to user.
-            const ignoredErrors = {
-              'error_no_match',     // Listened but no speech detected
-              'error_speech_timeout', // Timed out waiting for speech
-              'error_busy',         // Recognizer busy (restarting)
-            };
-            if (!_isDisposed &&
-                !ignoredErrors.contains(error.errorMsg)) {
-              _errorController.add(error.errorMsg);
-            }
-          },
-        );
-      }
+      final result = await _apiClient.transcribe(
+        audioBytes,
+        filename: 'segment.m4a',
+      );
 
-      if (!_isInitialized) {
-        _errorController.add('Speech recognition not available on this device');
-        _isRunning = false;
+      final text = (result['text'] as String? ?? '').trim();
+      final detectedLanguage = result['language'] as String? ?? 'auto';
+
+      if (text.isEmpty) {
+        debugPrint('[AudioCapture] Whisper returned empty text, skipping');
         return;
       }
 
-      _startListening();
-    } catch (e) {
-      debugPrint('[AudioCapture] Init error: $e');
-      _errorController.add(e.toString());
-      _isRunning = false;
-    }
-  }
-
-  /// Starts a single listening session.
-  void _startListening() {
-    if (!_isRunning || _isDisposed || !_isInitialized) return;
-
-    debugPrint('[AudioCapture] Starting listen session');
-    _speech.listen(
-      onResult: _onSpeechResult,
-      listenOptions: SpeechListenOptions(
-        listenMode: ListenMode.dictation,
-        cancelOnError: false,
-        partialResults: true,
-        autoPunctuation: true,
-        listenFor: const Duration(seconds: 30),
-        pauseFor: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  /// Called when speech recognition status changes.
-  void _onSpeechStatus(String status) {
-    debugPrint('[AudioCapture] Speech status: $status');
-
-    // Auto-restart listening when it stops (due to pause/timeout)
-    if (status == 'notListening' || status == 'done') {
-      if (_isRunning && !_isDisposed) {
-        // Brief delay before restarting to avoid tight loops
-        Future.delayed(const Duration(milliseconds: 200), () {
-          if (_isRunning && !_isDisposed) {
-            _startListening();
-          }
-        });
+      // Skip if this is the same text we just broadcast (duplicate)
+      if (text == _lastBroadcastText) {
+        debugPrint('[AudioCapture] Duplicate text, skipping');
+        return;
       }
-    }
-  }
-
-  /// Called when speech recognition produces a result.
-  void _onSpeechResult(SpeechRecognitionResult result) {
-    if (!_isRunning || _isDisposed) return;
-
-    final text = result.recognizedWords.trim();
-    if (text.isEmpty) return;
-
-    // Only broadcast final results to avoid duplicates
-    if (result.finalResult && text != _lastBroadcastText) {
       _lastBroadcastText = text;
-      debugPrint('[AudioCapture] Final: "$text"');
-      _broadcastToFirestore(text);
+
+      debugPrint('[AudioCapture] Whisper result: "$text" (lang: $detectedLanguage)');
+      await _broadcastToFirestore(text, detectedLanguage);
+    } catch (e) {
+      debugPrint('[AudioCapture] Whisper error: $e');
+      if (!_isDisposed) {
+        _errorController.add(e.toString());
+      }
     }
   }
 
   /// Writes the recognized text to Firestore.
-  Future<void> _broadcastToFirestore(String text) async {
+  Future<void> _broadcastToFirestore(
+      String text, String detectedLanguage) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
     try {
-      // Use 'auto' to let Google Translate auto-detect the source language
-      final detectedLanguage = _getLanguageFromLocale();
-
       final docData = {
         'text': text,
         'detectedLanguage': detectedLanguage,
@@ -159,7 +247,8 @@ class AudioCaptureService {
           .collection('transcriptions')
           .add(docData);
 
-      debugPrint('[AudioCapture] Broadcast: "$text" (lang: $detectedLanguage)');
+      debugPrint(
+          '[AudioCapture] Broadcast: "$text" (lang: $detectedLanguage)');
 
       if (!_isDisposed) {
         _transcriptionController.add({
@@ -175,19 +264,19 @@ class AudioCaptureService {
     }
   }
 
-  /// Returns 'auto' so Google Translate auto-detects the source language.
-  /// This avoids needing to know what language the speaker is using.
-  String _getLanguageFromLocale() {
-    return 'auto';
-  }
-
   /// Stops the capture.
+  ///
+  /// Note: this sets the running flag synchronously and then stops the
+  /// recorder. The [_recordLoop] will break on the next iteration check.
   void stop() {
     debugPrint('[AudioCapture] Stopping');
     _isRunning = false;
-    try {
-      _speech.stop();
-    } catch (_) {}
+    // Stop the recorder without awaiting — the loop will break on its own.
+    // We cannot await here because stop() is synchronous by design.
+    _recorder.stop().catchError((e) {
+      debugPrint('[AudioCapture] Recorder stop error (ignored): $e');
+      return null; // stop() returns Future<String?> — null is a valid result.
+    });
   }
 
   /// Releases all resources.
@@ -195,9 +284,10 @@ class AudioCaptureService {
     _isDisposed = true;
     _isRunning = false;
     try {
-      _speech.stop();
-      _speech.cancel();
+      await _recorder.stop();
+      _recorder.dispose();
     } catch (_) {}
+    _apiClient.dispose();
     await _errorController.close();
     await _transcriptionController.close();
   }

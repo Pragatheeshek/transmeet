@@ -150,27 +150,38 @@ class TranslationPipelineService {
   // ---------------------------------------------------------------------------
 
   /// Decodes base64 audio and plays it via just_audio.
+  ///
+  /// Uses [Future.any] with a 60-second timeout so the pipeline never hangs
+  /// permanently if the player fails to emit [ProcessingState.completed]
+  /// (e.g. unsupported codec, audio focus loss, or player error on Android).
   Future<void> _playBase64Audio(String base64Audio) async {
+    File? tempFile;
     try {
       final bytes = base64Decode(base64Audio);
       final tempDir = await getTemporaryDirectory();
-      final file = File('${tempDir.path}/tts_output_${DateTime.now().millisecondsSinceEpoch}.mp3');
-      await file.writeAsBytes(bytes);
+      tempFile = File('${tempDir.path}/tts_output_${DateTime.now().millisecondsSinceEpoch}.mp3');
+      await tempFile.writeAsBytes(bytes);
 
-      await _audioPlayer.setFilePath(file.path);
+      await _audioPlayer.setFilePath(tempFile.path);
       await _audioPlayer.play();
 
-      // Wait for playback to complete
-      await _audioPlayer.playerStateStream.firstWhere(
-        (state) => state.processingState == ProcessingState.completed,
-      );
-
-      // Clean up temp file
-      try {
-        await file.delete();
-      } catch (_) {}
+      // Wait for playback to complete, but cap at 60s to avoid permanent hangs.
+      // Future.any resolves as soon as the first future completes.
+      await Future.any([
+        _audioPlayer.playerStateStream
+            .firstWhere((state) =>
+                state.processingState == ProcessingState.completed ||
+                state.processingState == ProcessingState.idle)
+            .then((_) {}),
+        Future.delayed(const Duration(seconds: 60)),
+      ]);
     } catch (e) {
       debugPrint('[TranslationPipeline] Audio playback error: $e');
+    } finally {
+      // Always clean up the temp file, even if playback errored.
+      try {
+        await tempFile?.delete();
+      } catch (_) {}
     }
   }
 

@@ -32,13 +32,37 @@ app.use((err, _req, res, _next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Start
+// Start (Local testing)
 // ---------------------------------------------------------------------------
-app.listen(PORT, '0.0.0.0', () => {
-  const mockMode = process.env.TRANSLATION_MOCK_MODE === 'true';
-  console.log(`TransMeet server running on port ${PORT}`);
-  console.log(`Mock mode: ${mockMode ? 'ENABLED' : 'DISABLED'}`);
-  if (mockMode) {
-    console.log('  → Using mock responses (no API keys required)');
-  }
-});
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    const mockMode = process.env.TRANSLATION_MOCK_MODE === 'true';
+    const hasOpenAI = !!process.env.OPENAI_API_KEY;
+    const hasGoogleTranslate = !!process.env.GOOGLE_TRANSLATE_API_KEY;
+    const hasGoogleTTS = !!process.env.GOOGLE_TTS_API_KEY;
+
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════╗');
+    console.log(`║  TransMeet Translation Server — port ${PORT}       ║`);
+    console.log('╚══════════════════════════════════════════════════╝');
+    console.log(`  Mock mode      : ${mockMode ? 'ENABLED (no real APIs used)' : 'DISABLED (real APIs)'}`);
+    console.log(`  Whisper / Groq : ${hasOpenAI ? '✓ configured' : '✗ missing OPENAI_API_KEY'}`);
+    console.log(`  Google Translate: ${hasGoogleTranslate ? '✓ configured' : '✗ missing GOOGLE_TRANSLATE_API_KEY'}`);
+    console.log(`  Google TTS      : ${hasGoogleTTS ? '✓ configured' : '✗ missing GOOGLE_TTS_API_KEY'}`);
+    console.log('');
+    console.log('  Endpoints:');
+    console.log(`    GET  /health`);
+    console.log(`    GET  /api/translation/health`);
+    console.log(`    POST /api/translation/transcribe`);
+    console.log(`    POST /api/translation/translate`);
+    console.log(`    POST /api/translation/synthesize`);
+    console.log(`    POST /api/translation/pipeline  (combined STT+Translate+TTS)`);
+    console.log('');
+    console.log('  Server ready. Listening on 0.0.0.0:' + PORT);
+    console.log('');
+  });
+}
+
+// Export the Express app so Firebase Cloud Functions can wrap it
+module.exports = app;
+

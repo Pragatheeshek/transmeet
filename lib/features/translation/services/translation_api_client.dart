@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:transmeet/core/constants/app_constants.dart';
@@ -17,7 +17,11 @@ class TranslationApiClient {
   String get _baseUrl => AppConstants.backendBaseUrl;
 
   /// Timeout for API calls.
-  static const Duration _timeout = Duration(seconds: 30);
+  ///
+  /// Set generously because:
+  /// - The Google Translate API cold-start can take 15–20s on first call.
+  /// - Multipart uploads for Whisper STT are larger and slower on mobile.
+  static const Duration _timeout = Duration(seconds: 45);
 
   // ---------------------------------------------------------------------------
   // Speech-to-Text (Whisper)
@@ -37,8 +41,10 @@ class TranslationApiClient {
           filename: filename,
         ));
 
+      // Timeout covers both the upload AND the Whisper processing time.
       final streamedResponse = await request.send().timeout(_timeout);
-      final response = await http.Response.fromStream(streamedResponse);
+      final response = await http.Response.fromStream(streamedResponse)
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         return json.decode(response.body) as Map<String, dynamic>;
@@ -47,10 +53,10 @@ class TranslationApiClient {
       final error = _parseError(response);
       throw error;
     } on http.ClientException {
-      throw 'No internet connection. Please check your network.';
+      throw 'Cannot reach the translation server. Check your network.';
     } catch (e) {
       if (e is String) rethrow;
-      throw 'Speech recognition failed. Please try again.';
+      throw 'Speech recognition failed: ${e.runtimeType}';
     }
   }
 
@@ -139,14 +145,26 @@ class TranslationApiClient {
   // ---------------------------------------------------------------------------
 
   /// Checks if the backend is reachable.
+  ///
+  /// Retries once after 2 seconds if the first attempt fails, because the
+  /// first HTTP call on Android can be slow (DNS resolution, TCP handshake,
+  /// cleartext policy checks).
   Future<bool> isHealthy() async {
-    try {
-      final uri = Uri.parse('$_baseUrl/api/translation/health');
-      final response = await _client.get(uri).timeout(const Duration(seconds: 5));
-      return response.statusCode == 200;
-    } catch (_) {
-      return false;
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      try {
+        final uri = Uri.parse('$_baseUrl/api/translation/health');
+        final response = await _client
+            .get(uri)
+            .timeout(const Duration(seconds: 10));
+        if (response.statusCode == 200) return true;
+      } catch (e) {
+        debugPrint('[TranslationApiClient] Health check attempt $attempt failed: $e');
+        if (attempt < 2) {
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      }
     }
+    return false;
   }
 
   // ---------------------------------------------------------------------------

@@ -51,9 +51,15 @@ class _TranslationOverlayState extends State<TranslationOverlay>
   StreamSubscription<String>? _statusSub;
   StreamSubscription<String>? _captureErrorSub;
 
+  /// Timer to auto-dismiss error banners after a few seconds.
+  Timer? _errorDismissTimer;
+
   late final AnimationController _pulseController;
 
   static const int _maxCaptions = 5;
+
+  /// How long to show error banners before auto-dismissing.
+  static const Duration _errorDisplayDuration = Duration(seconds: 5);
 
   @override
   void initState() {
@@ -64,7 +70,7 @@ class _TranslationOverlayState extends State<TranslationOverlay>
     )..repeat(reverse: true);
 
     if (widget.isEnabled) {
-      _startServices();
+      _startServices(); // async — intentionally not awaited; runs in background.
     }
   }
 
@@ -72,7 +78,7 @@ class _TranslationOverlayState extends State<TranslationOverlay>
   void didUpdateWidget(covariant TranslationOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.isEnabled && !oldWidget.isEnabled) {
-      _startServices();
+      _startServices(); // async — intentionally not awaited; runs in background.
     } else if (!widget.isEnabled && oldWidget.isEnabled) {
       _stopServices();
     }
@@ -81,33 +87,83 @@ class _TranslationOverlayState extends State<TranslationOverlay>
   @override
   void dispose() {
     _pulseController.dispose();
+    _errorDismissTimer?.cancel();
     _stopServices();
     super.dispose();
   }
 
+  /// Sets an error message that auto-dismisses after [_errorDisplayDuration].
+  void _showError(String message) {
+    if (!mounted) return;
+
+    // Make error messages more user-friendly
+    final friendlyMessage = _friendlyError(message);
+
+    _errorDismissTimer?.cancel();
+    setState(() => _errorMessage = friendlyMessage);
+
+    _errorDismissTimer = Timer(_errorDisplayDuration, () {
+      if (mounted) {
+        setState(() => _errorMessage = null);
+      }
+    });
+  }
+
+  /// Converts raw error strings into user-friendly messages.
+  String _friendlyError(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('timeout') || lower.contains('timed out')) {
+      return 'Connection slow — retrying...';
+    }
+    if (lower.contains('socketexception') || lower.contains('network error')) {
+      return 'Network error — check your connection';
+    }
+    if (lower.contains('connection refused') ||
+        lower.contains('cannot reach')) {
+      return 'Translation server unreachable';
+    }
+    // Already friendly
+    return raw;
+  }
+
   /// Starts both the capture and translation services.
-  void _startServices() {
+  ///
+  /// This is async so that:
+  /// 1. Subscriptions are registered BEFORE the async work begins (prevents
+  ///    the race where health-check errors fire before listeners are attached).
+  /// 2. The translation engine is fully initialised (language loaded from
+  ///    Firestore) before the Firestore transcription listener starts.
+  Future<void> _startServices() async {
     if (_servicesRunning) return;
     _servicesRunning = true;
 
     debugPrint('[TranslationOverlay] Starting translation services');
 
-    // Mute remote audio so user only hears TTS
+    // Mute remote audio so the user only hears TTS instead of raw remote audio.
     widget.onMuteRemoteAudio(true);
 
-    // Start sender-side capture
+    if (mounted) {
+      setState(() => _statusText = 'Starting speech capture...');
+    }
+
+    // ── Sender-side: capture local speech ──────────────────────────────────
+    // Subscribe BEFORE calling start() to avoid the race where the
+    // health-check error fires before _captureErrorSub is registered.
     _captureService = AudioCaptureService();
-    _captureService!.start(meetingId: widget.meetingDocId);
     _captureErrorSub = _captureService!.onError.listen((error) {
-      if (mounted) {
-        setState(() => _errorMessage = 'Capture: $error');
-      }
+      debugPrint('[TranslationOverlay] Capture error: $error');
+      _showError('Capture: $error');
     });
 
-    // Start receiver-side translation engine
-    _translationEngine = RealtimeTranslationEngine();
-    _translationEngine!.start(meetingId: widget.meetingDocId);
+    // Fire-and-forget — the loop runs independently from here.
+    // Do NOT await this; it runs forever until stop() is called.
+    _captureService!.start(meetingId: widget.meetingDocId);
 
+    // ── Receiver-side: translate remote speech ─────────────────────────────
+    _translationEngine = RealtimeTranslationEngine();
+
+    // Wire up result/error/status listeners before awaiting start(),
+    // so no events are missed during the async initialisation.
     _resultSub = _translationEngine!.onResult.listen((result) {
       if (mounted) {
         setState(() {
@@ -115,22 +171,25 @@ class _TranslationOverlayState extends State<TranslationOverlay>
           if (_captions.length > _maxCaptions) {
             _captions.removeAt(0);
           }
+          // Clear any error on successful translation.
+          _errorDismissTimer?.cancel();
           _errorMessage = null;
         });
       }
     });
 
     _errorSub = _translationEngine!.onError.listen((error) {
-      if (mounted) {
-        setState(() => _errorMessage = error);
-      }
+      debugPrint('[TranslationOverlay] Translation error: $error');
+      _showError(error);
     });
 
     _statusSub = _translationEngine!.onStatus.listen((status) {
-      if (mounted) {
-        setState(() => _statusText = status);
-      }
+      if (mounted) setState(() => _statusText = status);
     });
+
+    // Await engine start so the preferred language is loaded from Firestore
+    // and the Firestore listener is registered before we return.
+    await _translationEngine!.start(meetingId: widget.meetingDocId);
 
     if (mounted) {
       setState(() => _statusText = 'Listening for speech...');
@@ -144,8 +203,10 @@ class _TranslationOverlayState extends State<TranslationOverlay>
 
     debugPrint('[TranslationOverlay] Stopping translation services');
 
-    // Unmute remote audio
+    // Unmute remote audio — restore the original WebRTC audio.
     widget.onMuteRemoteAudio(false);
+
+    _errorDismissTimer?.cancel();
 
     _resultSub?.cancel();
     _resultSub = null;
@@ -156,15 +217,22 @@ class _TranslationOverlayState extends State<TranslationOverlay>
     _captureErrorSub?.cancel();
     _captureErrorSub = null;
 
+    // Stop and dispose synchronously (stop is sync; dispose is fire-and-forget).
     _captureService?.stop();
-    _captureService?.dispose();
+    final captureToDispose = _captureService;
     _captureService = null;
+    captureToDispose?.dispose(); // Future ignored — safe, it just closes streams.
 
-    _translationEngine?.stop();
-    _translationEngine?.dispose();
+    final engineToStop = _translationEngine;
     _translationEngine = null;
+    engineToStop?.stop();
+    engineToStop?.dispose(); // Future ignored — safe, it just closes streams.
 
-    _captions.clear();
+    if (mounted) {
+      setState(() => _captions.clear());
+    } else {
+      _captions.clear();
+    }
   }
 
   @override

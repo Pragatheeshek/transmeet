@@ -45,4 +45,12 @@ router.post('/translate', controller.translate);
 // Text-to-speech via Google Cloud TTS
 router.post('/synthesize', controller.synthesize);
 
+// ── Combined pipeline: audio → STT → Translate → TTS in one round-trip ──────
+// Accepts: multipart/form-data with fields:
+//   audio           (file)   — raw audio bytes
+//   targetLanguage  (text)   — target language code (e.g. "hi")
+//   sourceLanguage  (text)   — optional source hint (e.g. "en", or omit for auto-detect)
+// Returns: { transcript, detectedLanguage, translatedText, audioContent }
+router.post('/pipeline', upload.single('audio'), controller.pipeline);
+
 module.exports = router;
