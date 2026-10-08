@@ -42,6 +42,7 @@ async function transcribe(audioBuffer, originalName = 'audio.wav') {
       file: fs.createReadStream(tempPath),
       model: 'whisper-large-v3-turbo',
       response_format: 'verbose_json',
+      prompt: 'The speaker is speaking in either English or Tamil (தமிழ்).',
     });
 
     const latency = Date.now() - t1;

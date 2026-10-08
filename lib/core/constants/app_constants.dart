@@ -53,17 +53,6 @@ class AppConstants {
   static const List<String> supportedLanguages = [
     'English',
     'Tamil',
-    'Hindi',
-    'Telugu',
-    'Malayalam',
-    'Kannada',
-    'French',
-    'German',
-    'Spanish',
-    'Italian',
-    'Portuguese',
-    'Japanese',
-    'Chinese',
   ];
 
   static const String selectLanguage = 'Select Language';
@@ -135,9 +124,8 @@ class AppConstants {
   // ---------------------------------------------------------------------------
 
   /// Base URL for the Node.js translation backend.
-  /// Pointing to the computer's Wi-Fi IP address so the physical mobile device can connect.
-  /// Note: Both the mobile device and this computer must be on the same Wi-Fi network.
-  static const String backendBaseUrl = 'http://10.110.216.27:3001';
+  /// Pointing to the live Render cloud server.
+  static const String backendBaseUrl = 'https://transmeet.onrender.com';
 
   // Translation UI strings
   static const String translationEnabled = 'Translation: ON';
