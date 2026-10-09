@@ -22,7 +22,6 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
   final _titleController = TextEditingController();
   final _meetingService = MeetingService();
 
-  String _selectedLanguage = AppConstants.supportedLanguages.first;
   bool _isCreating = false;
   bool _admissionControl = false;
 
@@ -65,7 +64,6 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
         hostUid: user.uid,
         hostName: user.displayName ?? user.email?.split('@').first ?? 'Host',
         hostEmail: user.email ?? '',
-        preferredLanguage: _selectedLanguage,
         admissionControl: _admissionControl,
       );
 
@@ -230,38 +228,6 @@ class _CreateMeetingScreenState extends State<CreateMeetingScreen> {
                 ),
                 const SizedBox(height: 20),
 
-                // Preferred language selector
-                Text(
-                  AppConstants.preferredLanguage,
-                  style: theme.textTheme.labelLarge,
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  initialValue: _selectedLanguage,
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.language_rounded),
-                  ),
-                  items: AppConstants.supportedLanguages
-                      .map((lang) => DropdownMenuItem(
-                            value: lang,
-                            child: Text(lang),
-                          ))
-                      .toList(),
-                  onChanged: _isCreating
-                      ? null
-                      : (value) {
-                          if (value != null) {
-                            setState(() => _selectedLanguage = value);
-                          }
-                        },
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return AppConstants.languageRequired;
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 20),
 
                 // Admission control toggle
                 Container(

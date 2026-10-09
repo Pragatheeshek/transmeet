@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -17,6 +18,7 @@ import 'package:transmeet/features/meeting/widgets/admission_banner.dart';
 import 'package:transmeet/features/meeting/widgets/live_transcription_panel.dart';
 import 'package:transmeet/features/meeting/widgets/participant_panel.dart';
 import 'package:transmeet/features/meeting/widgets/webrtc_video_view.dart';
+import 'package:transmeet/features/translation/services/audio_capture_service.dart';
 import 'package:transmeet/features/translation/widgets/translation_overlay.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,6 +66,9 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   bool _isPipMode = false;
   String _initError = '';
 
+  AudioCaptureService? _captureService;
+  StreamSubscription<String>? _captureErrorSub;
+
   // ─── Screen share ──────────────────────────────────────────────────────────
   MediaStream? _screenStream;
   MediaStreamTrack? _savedCameraTrack;
@@ -74,15 +79,16 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
   // ─── Participant / WebRTC state ─────────────────────────────────────────────
   List<ParticipantModel> _participants = [];
-  MediaStream? _remoteStream;
+  Map<String, MediaStream> _remoteStreams = {};
   bool _isHost = false;
   bool _webrtcInitiated = false;
 
   // ─── Subscriptions ──────────────────────────────────────────────────────────
   StreamSubscription<List<ParticipantModel>>? _participantsSub;
   StreamSubscription<RTCPeerConnectionState>? _connectionStateSub;
-  StreamSubscription<MediaStream>? _remoteStreamSub;
+  StreamSubscription<Map<String, MediaStream>>? _remoteStreamsSub;
   StreamSubscription<dynamic>? _meetingStatusSub;
+  StreamSubscription<dynamic>? _screenSharesSub;
 
   // ─── Guards ─────────────────────────────────────────────────────────────────
   bool _hasLeftMeeting = false;
@@ -214,16 +220,12 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
       if (!mounted) return;
 
-      _remoteStreamSub = _webRTCService.onRemoteStream.listen((stream) {
-        if (!mounted) return;
-        debugPrint('[Meeting] Remote stream received');
-        setState(() => _remoteStream = stream);
-      });
+      _webRTCService.joinRoom(widget.meeting.docId, user.uid);
 
-      _connectionStateSub = _webRTCService.onConnectionState.listen((state) {
+      _remoteStreamsSub = _webRTCService.onRemoteStreamsChanged.listen((streams) {
         if (!mounted) return;
-        debugPrint('[Meeting] WebRTC state: $state');
-        _onWebRTCStateChanged(state);
+        debugPrint('[Meeting] Remote streams changed');
+        setState(() => _remoteStreams = streams);
       });
 
       _participantsSub = _participantService
@@ -240,12 +242,31 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         setState(() => _phaseBReady = true);
       }
 
+      _screenSharesSub = FirebaseFirestore.instance
+          .collection('meetings')
+          .doc(widget.meeting.docId)
+          .collection('screenShares')
+          .snapshots()
+          .listen((snapshot) {
+        for (var doc in snapshot.docs) {
+          if (doc.id != user.uid && doc.data()['active'] == true) {
+            _webRTCService.acceptRemoteScreenShare(doc.id);
+          }
+        }
+      });
+
       // Keep call connection alive in background via foreground service
       ForegroundServiceHelper.startCall(
         title: widget.meeting.title,
         text: 'Meeting in progress',
       );
-
+      // Start audio capture service for translation broadcast
+      _captureService = AudioCaptureService();
+      _captureErrorSub = _captureService!.onError.listen((error) {
+        debugPrint('[Meeting] Capture error: $error');
+      });
+      // Do NOT start automatically. Wait for user to toggle translation on.
+      
       _maybeStartWebRTC();
     } catch (e) {
       debugPrint('[Meeting] Phase B error: $e');
@@ -267,79 +288,36 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   void _maybeStartWebRTC() {
     if (!_phaseAReady || !_phaseBReady) return;
     if (_webrtcInitiated) return;
-    if (_participants.length < 2) return;
-    _startWebRTC();
-  }
-
-  void _startWebRTC() {
-    if (_webrtcInitiated) return;
     _webrtcInitiated = true;
-
-    debugPrint('[Meeting] Starting WebRTC — isHost=$_isHost');
-    setState(() => _phase = _Phase.connecting);
-
-    _connectingTimeout = Timer(const Duration(seconds: 45), () {
-      if (mounted && _phase == _Phase.connecting) {
-        debugPrint('[Meeting] WebRTC timeout');
-        setState(() => _phase = _Phase.failed);
+    setState(() => _phase = _Phase.connected);
+    
+    final myUid = FirebaseAuth.instance.currentUser?.uid;
+    if (myUid != null) {
+      for (var p in _participants) {
+        if (p.uid != myUid) {
+          _webRTCService.connectToPeer(p.uid);
+        }
       }
-    });
-
-    final future = _isHost
-        ? _webRTCService.createOffer(widget.meeting.docId)
-        : _webRTCService.createAnswer(widget.meeting.docId);
-
-    future.catchError((e) {
-      debugPrint('[WebRTC] Signaling error: $e');
-      _connectingTimeout?.cancel();
-      _disconnectTimer?.cancel();
-      if (mounted) setState(() => _phase = _Phase.failed);
-    });
+    }
   }
 
   void _onWebRTCStateChanged(RTCPeerConnectionState state) {
-    debugPrint('[Meeting] WebRTC peer connection state: $state');
-    if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-      _connectingTimeout?.cancel();
-      _disconnectTimer?.cancel();
-      if (mounted) setState(() => _phase = _Phase.connected);
-    } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-      _connectingTimeout?.cancel();
-      _disconnectTimer?.cancel();
-      if (mounted && _phase != _Phase.ended) {
-        setState(() => _phase = _Phase.failed);
-      }
-    } else if (state ==
-        RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-      // Mobile networks can trigger transient disconnects; wait 5s before failing
-      _disconnectTimer?.cancel();
-      _disconnectTimer = Timer(const Duration(seconds: 5), () {
-        if (mounted && _phase != _Phase.ended && _phase != _Phase.connected) {
-          debugPrint('[Meeting] WebRTC sustained disconnect -> failing');
-          setState(() => _phase = _Phase.failed);
-        }
-      });
-    }
+    // Handled internally in MeshWebRTCService
   }
 
   void _onParticipantListChanged(int prev, int current) {
     if (!_phaseAReady || !_phaseBReady) return;
-
-    if (!_webrtcInitiated && current >= 2) {
-      _startWebRTC();
-    } else if (_webrtcInitiated && current < 2) {
-      debugPrint('[Meeting] Remote left → resetting WebRTC');
-      _webrtcInitiated = false;
-      _connectingTimeout?.cancel();
-      _disconnectTimer?.cancel();
-      _webRTCService.resetConnection().then((_) {
-        if (mounted) {
-          setState(() {
-            _remoteStream = null;
-            _phase = _Phase.waitingForPeer;
-          });
+    final myUid = FirebaseAuth.instance.currentUser?.uid;
+    
+    if (!_webrtcInitiated && current >= 1) {
+      _maybeStartWebRTC();
+    } else if (_webrtcInitiated) {
+      final currentUids = _participants.map((p) => p.uid).toSet();
+      for (var p in _participants) {
+        if (p.uid != myUid) {
+          _webRTCService.connectToPeer(p.uid);
         }
-      });
+      }
     }
   }
 
@@ -398,6 +376,9 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       meetingId: widget.meeting.docId,
       isMicOn: !newMuted,
     );
+    if (_isTranslationEnabled) {
+      _captureService?.pauseCapture(newMuted);
+    }
   }
 
   void _toggleCamera() {
@@ -422,8 +403,15 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     }
   }
 
-  void _toggleTranslation() =>
-      setState(() => _isTranslationEnabled = !_isTranslationEnabled);
+  void _toggleTranslation() {
+    setState(() => _isTranslationEnabled = !_isTranslationEnabled);
+    if (_isTranslationEnabled) {
+      _captureService?.start(meetingId: widget.meeting.docId);
+      _captureService?.pauseCapture(_isMicMuted);
+    } else {
+      _captureService?.stop();
+    }
+  }
 
   Future<void> _toggleScreenShare() async {
     if (_isScreenSharing) {
@@ -431,17 +419,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       _screenShareCheckTimer?.cancel();
       _screenShareCheckTimer = null;
 
-      // Stop screen tracks
-      _screenStream?.getTracks().forEach((t) => t.stop());
-      await _screenStream?.dispose();
-      _screenStream = null;
-
-      // Restore camera track in peer connection if connected
-      if (_savedCameraTrack != null &&
-          _webRTCService.peerConnection != null) {
-        await _webRTCService.replaceVideoTrack(_savedCameraTrack!);
-      }
-      _savedCameraTrack = null;
+      await _webRTCService.stopScreenShare();
 
       await ForegroundServiceHelper.stopScreenShare();
       if (mounted) setState(() => _isScreenSharing = false);
@@ -451,30 +429,9 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       try {
         await ForegroundServiceHelper.startScreenShare();
 
-        final screenStream =
-            await navigator.mediaDevices.getDisplayMedia({
-          'video': true,
-          'audio': false,
-        });
+        final remoteUids = _participants.map((p) => p.uid).toList();
+        await _webRTCService.startScreenShare(remoteUids);
 
-        if (screenStream.getVideoTracks().isEmpty) {
-          await screenStream.dispose();
-          await ForegroundServiceHelper.stopScreenShare();
-          throw 'No video track from screen capture';
-        }
-
-        // Save current camera track before replacing
-        _savedCameraTrack =
-            _webRTCService.localStream?.getVideoTracks().firstOrNull;
-
-        final screenTrack = screenStream.getVideoTracks().first;
-
-        // Replace track in peer connection if connected
-        if (_webRTCService.peerConnection != null) {
-          await _webRTCService.replaceVideoTrack(screenTrack);
-        }
-
-        _screenStream = screenStream;
         if (mounted) setState(() => _isScreenSharing = true);
         debugPrint('[Meeting] Screen sharing started');
 
@@ -482,7 +439,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         _screenShareCheckTimer?.cancel();
         _screenShareCheckTimer =
             Timer.periodic(const Duration(seconds: 1), (_) {
-          final tracks = _screenStream?.getVideoTracks();
+          final tracks = _webRTCService.localScreenStream?.getVideoTracks();
           if (tracks == null ||
               tracks.isEmpty ||
               !tracks.first.enabled) {
@@ -696,21 +653,23 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     // Stop screen share if active
     _screenShareCheckTimer?.cancel();
     _screenShareCheckTimer = null;
-    _screenStream?.getTracks().forEach((t) => t.stop());
-    await _screenStream?.dispose();
-    _screenStream = null;
+    await _webRTCService.stopScreenShare();
 
     _connectingTimeout?.cancel();
     _disconnectTimer?.cancel();
+    _captureErrorSub?.cancel();
+    _captureService?.stop();
 
     await _participantsSub?.cancel();
     await _connectionStateSub?.cancel();
-    await _remoteStreamSub?.cancel();
+    await _remoteStreamsSub?.cancel();
     await _meetingStatusSub?.cancel();
+    await _screenSharesSub?.cancel();
     _participantsSub = null;
     _connectionStateSub = null;
-    _remoteStreamSub = null;
+    _remoteStreamsSub = null;
     _meetingStatusSub = null;
+    _screenSharesSub = null;
 
     if (_isHost) {
       try {
@@ -719,7 +678,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       } catch (e) {
         debugPrint('[Meeting] Failed to end meeting: $e');
       }
-      await _webRTCService.cleanupSignaling(widget.meeting.docId);
+      await _webRTCService.cleanupSignalingRoom(widget.meeting.docId);
     }
 
     await _participantService.leaveMeeting(widget.meeting.docId);
@@ -789,20 +748,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   }
 
   void _retryWebRTC() async {
-    _connectingTimeout?.cancel();
-    _disconnectTimer?.cancel();
-    setState(() {
-      _webrtcInitiated = false;
-      _phase = _Phase.waitingForPeer;
-      _remoteStream = null;
-    });
-    try {
-      await _webRTCService.cleanupSignaling(widget.meeting.docId);
-    } catch (e) {
-      debugPrint('[Meeting] Error cleaning up signaling on retry: $e');
-    }
-    await _webRTCService.resetConnection();
-    if (mounted) _maybeStartWebRTC();
+    // Retry logic is now handled in Mesh WebRTC implicitly
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -894,8 +840,10 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
               // ── 4. Translation overlay (above controls) ────────────────────
               TranslationOverlay(
-                isEnabled: _isTranslationEnabled,
+                isCaptionsEnabled: _isLiveTranscriptionOn,
+                isTtsEnabled: _isTranslationEnabled,
                 meetingDocId: widget.meeting.docId,
+                onCaptionReceived: (speaker, text) => addTranscriptionEntry(speaker, text),
                 onMuteRemoteAudio: (mute) =>
                     _webRTCService.muteRemoteAudio(mute),
               ),
@@ -922,7 +870,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
   Widget _buildTopBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: const BoxDecoration(
         color: Color(0xFF16162A),
         border: Border(bottom: BorderSide(color: Colors.white10)),
@@ -970,7 +918,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
             constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
           ),
           // Layout toggle (Grid vs PiP)
-          if (_phase == _Phase.connected && _remoteStream != null)
+          if (_phase == _Phase.connected && _remoteStreams.isNotEmpty)
             IconButton(
               icon: Icon(
                 _isPipMode
@@ -1034,7 +982,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     }
 
     // ── Connected with remote video — grid layout ──────────────────────────────
-    if (_phase == _Phase.connected && _remoteStream != null) {
+    if (_phase == _Phase.connected) {
       return _buildConnectedGrid();
     }
 
@@ -1109,31 +1057,61 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
   /// - When _isPipMode is true: Fullscreen remote with floating draggable/corner PiP card.
   Widget _buildConnectedGrid() {
     final myUid = FirebaseAuth.instance.currentUser?.uid;
-    final remote = _participants.where((p) => p.uid != myUid).firstOrNull;
-    final remoteName = remote?.displayName ?? 'Participant';
-    final remoteInitial =
-        remoteName.isNotEmpty ? remoteName[0].toUpperCase() : '?';
-    final remoteMicOn = remote?.isMicOn ?? true;
-    final remoteCameraOff = !(remote?.isCameraOn ?? true);
+    final List<Widget> tiles = [];
 
-    if (_isPipMode) {
+    // 1. Local participant
+    tiles.add(_buildVideoTile(
+      stream: _isScreenSharing ? _webRTCService.localScreenStream : _webRTCService.localStream,
+      name: _isScreenSharing ? 'Your Screen' : 'You',
+      isMicOn: !_isMicMuted,
+      isCameraOff: _isScreenSharing ? false : _isCameraOff,
+      initial: _myInitial,
+      mirror: !_isScreenSharing,
+      objectFit: _isScreenSharing
+          ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
+          : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+    ));
+
+    // 2. Remote participants
+    for (var p in _participants) {
+      if (p.uid == myUid) continue;
+      MediaStream? stream;
+      _remoteStreams.forEach((id, s) {
+        if (id.contains(p.uid) && !id.endsWith('_screen')) stream = s;
+      });
+      tiles.add(_buildVideoTile(
+        stream: stream,
+        name: p.displayName.isNotEmpty ? p.displayName : 'Participant',
+        isMicOn: p.isMicOn,
+        isCameraOff: !p.isCameraOn,
+        initial: p.displayName.isNotEmpty ? p.displayName[0].toUpperCase() : '?',
+        mirror: false,
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      ));
+    }
+
+    // 3. Screen shares
+    _remoteStreams.forEach((id, stream) {
+      if (id.endsWith('_screen')) {
+        final sharerUid = id.split('_').firstWhere((part) => part != myUid && part != 'screen', orElse: () => '');
+        final p = _participants.where((p) => p.uid == sharerUid).firstOrNull;
+        tiles.add(_buildVideoTile(
+          stream: stream,
+          name: p != null ? '${p.displayName}\'s Screen' : 'Screen Share',
+          isMicOn: true,
+          isCameraOff: false,
+          initial: 'S',
+          mirror: false,
+          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+        ));
+      }
+    });
+
+    if (_isPipMode && tiles.length > 1) {
       return Stack(
         fit: StackFit.expand,
         children: [
-          // Remote full-screen
-          _buildVideoTile(
-            stream: _remoteStream,
-            name: remoteName,
-            isMicOn: remoteMicOn,
-            isCameraOff: remoteCameraOff,
-            initial: remoteInitial,
-            mirror: false,
-            objectFit: _isScreenSharing
-                ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
-                : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-          ),
-
-          // Floating local PiP tile
+          tiles[1], // main
           Positioned(
             right: 16,
             bottom: 16,
@@ -1155,9 +1133,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: _buildVideoTile(
-                  stream: _isScreenSharing
-                      ? _screenStream
-                      : _webRTCService.localStream,
+                  stream: _isScreenSharing ? _webRTCService.localScreenStream : _webRTCService.localStream,
                   name: _isScreenSharing ? 'Your Screen' : 'You',
                   isMicOn: !_isMicMuted,
                   isCameraOff: _isScreenSharing ? false : _isCameraOff,
@@ -1172,43 +1148,19 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       );
     }
 
-    // Default: Clean 50/50 Balanced Vertical Split Grid View
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+
     return Padding(
       padding: const EdgeInsets.all(6),
-      child: Column(
-        children: [
-          // ── Remote participant (Top 50%) ──────────────────────────────────
-          Expanded(
-            child: _buildVideoTile(
-              stream: _remoteStream,
-              name: remoteName,
-              isMicOn: remoteMicOn,
-              isCameraOff: remoteCameraOff,
-              initial: remoteInitial,
-              mirror: false,
-              objectFit: _isScreenSharing
-                  ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
-                  : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-            ),
-          ),
-          const SizedBox(height: 6),
-          // ── Local participant (Bottom 50%) ────────────────────────────────
-          Expanded(
-            child: _buildVideoTile(
-              stream: _isScreenSharing
-                  ? _screenStream
-                  : _webRTCService.localStream,
-              name: _isScreenSharing ? 'Your Screen' : 'You',
-              isMicOn: !_isMicMuted,
-              isCameraOff: _isScreenSharing ? false : _isCameraOff,
-              initial: _myInitial,
-              mirror: !_isScreenSharing,
-              objectFit: _isScreenSharing
-                  ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain
-                  : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-            ),
-          ),
-        ],
+      child: GridView.builder(
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: isLandscape ? (tiles.length > 2 ? 3 : 2) : (tiles.length > 2 ? 2 : 1),
+          crossAxisSpacing: 6,
+          mainAxisSpacing: 6,
+          childAspectRatio: isLandscape ? 1.5 : (tiles.length > 2 ? 1.0 : 1.2),
+        ),
+        itemCount: tiles.length,
+        itemBuilder: (context, index) => tiles[index],
       ),
     );
   }
@@ -1390,30 +1342,38 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
           colors: [Color(0xFF1A1A2E), Color(0xFF0D0D1A)],
         ),
       ),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircleAvatar(
-              radius: large ? 48 : 24,
-              backgroundColor: Colors.deepPurple.withValues(alpha: 0.6),
-              child: Text(initial,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: large ? 40 : 18,
-                    fontWeight: FontWeight.bold,
-                  )),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isLarge = large && constraints.maxHeight > 120;
+          return Center(
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: isLarge ? 48 : 24,
+                    backgroundColor: Colors.deepPurple.withValues(alpha: 0.6),
+                    child: Text(initial,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: isLarge ? 40 : 18,
+                          fontWeight: FontWeight.bold,
+                        )),
+                  ),
+                  if (isLarge) ...[
+                    const SizedBox(height: 10),
+                    Text(name,
+                        style: const TextStyle(
+                            color: Colors.white60,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500)),
+                  ],
+                ],
+              ),
             ),
-            if (large) ...[
-              const SizedBox(height: 10),
-              Text(name,
-                  style: const TextStyle(
-                      color: Colors.white60,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500)),
-            ],
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -1492,7 +1452,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
   Widget _buildBottomControlBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: const BoxDecoration(
         color: Color(0xFF16162A),
         border: Border(top: BorderSide(color: Colors.white10)),
@@ -1535,15 +1495,15 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(12),
                   decoration: const BoxDecoration(
                     color: Colors.red,
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.call_end_rounded,
-                      color: Colors.white, size: 24),
+                      color: Colors.white, size: 20),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 const Text('Leave',
                     style: TextStyle(color: Colors.redAccent, fontSize: 10)),
               ],
@@ -1566,7 +1526,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: active
                   ? Colors.white.withValues(alpha: 0.1)
@@ -1574,9 +1534,9 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
               shape: BoxShape.circle,
             ),
             child: Icon(icon,
-                color: active ? Colors.white : Colors.redAccent, size: 22),
+                color: active ? Colors.white : Colors.redAccent, size: 20),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(label,
               style: TextStyle(
                 color: active ? Colors.white60 : Colors.redAccent,

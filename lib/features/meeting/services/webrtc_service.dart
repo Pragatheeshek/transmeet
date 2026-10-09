@@ -3,64 +3,64 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
-/// Service to handle WebRTC media and signaling via Firestore.
-///
-/// Signaling structure:
-///   meetings/{meetingId}          → offer, answer fields
-///   meetings/{meetingId}/callerCandidates/{auto}  → Host ICE candidates
-///   meetings/{meetingId}/calleeCandidates/{auto}  → Guest ICE candidates
+class PeerConnectionState {
+  final RTCPeerConnection peerConnection;
+  MediaStream? remoteStream;
+  List<RTCIceCandidate> pendingCandidates = [];
+  bool remoteDescriptionSet = false;
+  StreamSubscription? documentSub;
+  StreamSubscription? callerCandidateSub;
+  StreamSubscription? calleeCandidateSub;
+
+  PeerConnectionState(this.peerConnection);
+
+  Future<void> dispose() async {
+    await documentSub?.cancel();
+    await callerCandidateSub?.cancel();
+    await calleeCandidateSub?.cancel();
+    remoteStream?.getTracks().forEach((t) => t.stop());
+    await remoteStream?.dispose();
+    await peerConnection.close();
+  }
+}
+
 class WebRTCService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  RTCPeerConnection? peerConnection;
   MediaStream? localStream;
-  MediaStream? _remoteStream;
+  MediaStream? localScreenStream;
 
-  MediaStream? get remoteStream => _remoteStream;
-
-  final _remoteStreamController = StreamController<MediaStream>.broadcast();
-  Stream<MediaStream> get onRemoteStream => _remoteStreamController.stream;
-
-  final _connectionStateController = StreamController<RTCPeerConnectionState>.broadcast();
-  Stream<RTCPeerConnectionState> get onConnectionState => _connectionStateController.stream;
-
-  String? roomId;
-  StreamSubscription<DocumentSnapshot>? _roomSubscription;
-  StreamSubscription<QuerySnapshot>? _candidateSubscription;
+  String? _roomId;
+  String? _myUid;
   bool _disposed = false;
 
-  /// Tracks whether the remote description has been set on the peer connection.
-  ///
-  /// This replaces the buggy `peerConnection?.getRemoteDescription() == null`
-  /// check — that method returns a Future, so comparing it to null was always
-  /// false, which prevented the host from ever setting the answer.
-  bool _remoteDescriptionSet = false;
+  // connectionId -> PeerConnectionState
+  final Map<String, PeerConnectionState> _connections = {};
 
-  /// Buffers ICE candidates that arrive before the remote description is set.
-  ///
-  /// Without buffering, candidates received before setRemoteDescription()
-  /// are silently discarded by WebRTC, causing connectivity checks to fail.
-  final List<RTCIceCandidate> _pendingCandidates = [];
+  final _remoteStreamsController =
+      StreamController<Map<String, MediaStream>>.broadcast();
+  Stream<Map<String, MediaStream>> get onRemoteStreamsChanged =>
+      _remoteStreamsController.stream;
 
-  /// Whether the local stream has been successfully initialized.
-  bool get isReady => localStream != null && !_disposed;
+  Map<String, MediaStream> get currentRemoteStreams {
+    final streams = <String, MediaStream>{};
+    _connections.forEach((id, state) {
+      if (state.remoteStream != null) {
+        streams[id] = state.remoteStream!;
+      }
+    });
+    return streams;
+  }
 
-  /// ICE servers configuration — includes both STUN and TURN servers.
-  ///
-  /// STUN-only works when both peers have a direct route (open/cone NAT).
-  /// Mobile networks (4G/5G) almost always use symmetric NAT, which requires
-  /// a TURN relay server as fallback. Without TURN, connections between
-  /// mobile devices will fail consistently.
+  void _notifyStreamsChanged() {
+    if (!_disposed) {
+      _remoteStreamsController.add(currentRemoteStreams);
+    }
+  }
+
   final Map<String, dynamic> configuration = {
     'iceServers': [
-      {
-        'urls': [
-          'stun:stun1.l.google.com:19302',
-          'stun:stun2.l.google.com:19302',
-        ]
-      },
-      // Free TURN servers from Open Relay Project (metered.ca)
-      // These provide relay capability for NAT traversal on mobile networks.
+      {'urls': ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302']},
       {
         'urls': 'turn:a.relay.metered.ca:80',
         'username': 'e8dd65b92f070a50a37e811a',
@@ -92,318 +92,265 @@ class WebRTCService {
     "optional": [],
   };
 
-  /// Initializes local media (camera and mic).
   Future<void> initLocalStream() async {
-    debugPrint('[WebRTC] Initializing local stream');
     if (_disposed) return;
-    final Map<String, dynamic> mediaConstraints = {
+    localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
-      'video': {
-        'facingMode': 'user',
-      }
-    };
-
-    localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-    debugPrint('[WebRTC] Local stream initialized: ${localStream?.id}');
-  }
-
-  /// Creates a peer connection and adds local tracks.
-  Future<void> _createPeerConnection() async {
-    debugPrint('[WebRTC] Creating PeerConnection');
-
-    // Reset state for new connection
-    _remoteDescriptionSet = false;
-    _pendingCandidates.clear();
-
-    peerConnection = await createPeerConnection(configuration, offerSdpConstraints);
-
-    peerConnection?.onTrack = (RTCTrackEvent event) {
-      debugPrint('[WebRTC] Remote track received: ${event.track.kind}');
-      if (event.track.kind == 'video' || event.track.kind == 'audio') {
-        _remoteStream ??= event.streams.first;
-        if (_remoteStream != null && !_disposed) {
-          _remoteStreamController.add(_remoteStream!);
-        }
-      }
-    };
-
-    peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
-      debugPrint('[WebRTC] Connection state: $state');
-      if (!_disposed) {
-        _connectionStateController.add(state);
-      }
-    };
-
-    peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
-      debugPrint('[WebRTC] ICE connection state: $state');
-    };
-
-    peerConnection?.onIceGatheringState = (RTCIceGatheringState state) {
-      debugPrint('[WebRTC] ICE gathering state: $state');
-    };
-
-    peerConnection?.onSignalingState = (RTCSignalingState state) {
-      debugPrint('[WebRTC] Signaling state: $state');
-    };
-
-    localStream?.getTracks().forEach((track) {
-      peerConnection?.addTrack(track, localStream!);
+      'video': {'facingMode': 'user'}
     });
-    debugPrint('[WebRTC] Local tracks added to PeerConnection');
   }
 
-  /// Adds buffered ICE candidates after the remote description has been set.
-  Future<void> _drainPendingCandidates() async {
-    debugPrint('[WebRTC] Draining ${_pendingCandidates.length} buffered ICE candidates');
-    for (final candidate in _pendingCandidates) {
-      try {
-        await peerConnection?.addCandidate(candidate);
-      } catch (e) {
-        debugPrint('[WebRTC] Failed to add buffered candidate: $e');
-      }
-    }
-    _pendingCandidates.clear();
+  void joinRoom(String meetingId, String myUid) {
+    _roomId = meetingId;
+    _myUid = myUid;
+    debugPrint('[MeshWebRTC] Joined room: $meetingId as $myUid');
   }
 
-  /// Adds an ICE candidate, buffering it if the remote description isn't set yet.
-  Future<void> _addIceCandidate(RTCIceCandidate candidate) async {
-    if (_remoteDescriptionSet) {
-      try {
-        await peerConnection?.addCandidate(candidate);
-      } catch (e) {
-        debugPrint('[WebRTC] Failed to add ICE candidate: $e');
-      }
-    } else {
-      debugPrint('[WebRTC] Buffering ICE candidate (remote desc not set yet)');
-      _pendingCandidates.add(candidate);
-    }
+  /// Connect to a remote user (camera). Called when participant list updates.
+  Future<void> connectToPeer(String remoteUid) async {
+    if (_disposed || _roomId == null || _myUid == null || localStream == null) return;
+    if (remoteUid == _myUid) return;
+
+    // Lexicographical sort to determine caller/callee consistently
+    final isCaller = _myUid!.compareTo(remoteUid) < 0;
+    final connectionId = isCaller ? '${_myUid}_$remoteUid' : '${remoteUid}_$_myUid';
+
+    if (_connections.containsKey(connectionId)) return; // Already connecting/connected
+
+    debugPrint('[MeshWebRTC] Connecting to $remoteUid, connectionId: $connectionId (isCaller: $isCaller)');
+    await _establishConnection(connectionId, isCaller, localStream!, remoteUid);
   }
 
-  /// Deletes stale signaling data (offer, answer, ICE candidates) from Firestore.
-  ///
-  /// Called before creating a new offer to prevent stale SDP issues.
-  Future<void> cleanupSignaling(String meetingId) async {
-    debugPrint('[WebRTC] Cleaning up stale signaling data');
-    final roomRef = _firestore.collection('meetings').doc(meetingId);
-
+  /// Start screen sharing and connect to all existing remote UIDs.
+  Future<void> startScreenShare(List<String> remoteUids) async {
+    if (_disposed || _roomId == null || _myUid == null) return;
+    
     try {
-      // Remove offer and answer fields from the meeting document.
-      await roomRef.update({
-        'offer': FieldValue.delete(),
-        'answer': FieldValue.delete(),
+      localScreenStream = await navigator.mediaDevices.getDisplayMedia({
+        'video': true,
+        'audio': false,
       });
-    } catch (e) {
-      debugPrint('[WebRTC] Failed to clear offer/answer (may not exist): $e');
-    }
 
-    // Delete all caller candidates.
-    try {
-      final callerCandidates = await roomRef.collection('callerCandidates').get();
-      for (final doc in callerCandidates.docs) {
-        await doc.reference.delete();
+      // Notify Firestore that I am screen sharing
+      await _firestore.collection('meetings').doc(_roomId)
+          .collection('screenShares').doc(_myUid).set({
+        'active': true,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
+      // The screencaster is ALWAYS the caller for their screen share
+      for (final remoteUid in remoteUids) {
+        if (remoteUid == _myUid) continue;
+        final connectionId = '${_myUid}_${remoteUid}_screen';
+        if (!_connections.containsKey(connectionId)) {
+          await _establishConnection(connectionId, true, localScreenStream!, remoteUid);
+        }
       }
+      
+      // Stop tracking on ended
+      localScreenStream?.getVideoTracks().firstOrNull?.onEnded = () {
+        stopScreenShare();
+      };
     } catch (e) {
-      debugPrint('[WebRTC] Failed to clear callerCandidates: $e');
+      debugPrint('[MeshWebRTC] Screen share failed: $e');
+      rethrow;
     }
-
-    // Delete all callee candidates.
-    try {
-      final calleeCandidates = await roomRef.collection('calleeCandidates').get();
-      for (final doc in calleeCandidates.docs) {
-        await doc.reference.delete();
-      }
-    } catch (e) {
-      debugPrint('[WebRTC] Failed to clear calleeCandidates: $e');
-    }
-
-    debugPrint('[WebRTC] Signaling data cleaned up');
   }
 
-  /// Resets the peer connection without disposing localStream.
-  ///
-  /// Called when the remote participant leaves so the host can re-establish
-  /// a connection when a new participant joins.
-  Future<void> resetConnection() async {
-    debugPrint('[WebRTC] Resetting connection');
+  /// Connect to a remote user's screen share.
+  Future<void> acceptRemoteScreenShare(String remoteUid) async {
+    if (_disposed || _roomId == null || _myUid == null || localStream == null) return;
+    // For remote screen share, remote is the caller, I am the callee
+    final connectionId = '${remoteUid}_${_myUid}_screen';
+    if (_connections.containsKey(connectionId)) return;
 
-    await _roomSubscription?.cancel();
-    _roomSubscription = null;
-
-    await _candidateSubscription?.cancel();
-    _candidateSubscription = null;
-
-    await _remoteStream?.dispose();
-    _remoteStream = null;
-
-    _remoteDescriptionSet = false;
-    _pendingCandidates.clear();
-
-    await peerConnection?.close();
-    peerConnection = null;
-
-    debugPrint('[WebRTC] Connection reset complete');
+    // We can use localStream (or an empty stream) as we just need to receive
+    await _establishConnection(connectionId, false, localStream!, remoteUid);
   }
 
-  /// Called by the HOST to create an offer and listen for an answer.
-  Future<void> createOffer(String meetingId) async {
-    if (_disposed) return;
-    if (localStream == null) {
-      throw 'Local stream not ready — call initLocalStream() first.';
+  /// Stop screen sharing and close all screen share connections.
+  Future<void> stopScreenShare() async {
+    if (localScreenStream != null) {
+      localScreenStream!.getTracks().forEach((t) => t.stop());
+      await localScreenStream!.dispose();
+      localScreenStream = null;
     }
-    debugPrint('[WebRTC] Host creating offer for meeting: $meetingId');
-    roomId = meetingId;
 
-    // Clean stale signaling data before creating a new offer.
-    await cleanupSignaling(meetingId);
+    if (_roomId != null && _myUid != null) {
+      try {
+        await _firestore.collection('meetings').doc(_roomId)
+            .collection('screenShares').doc(_myUid).delete();
+      } catch (_) {}
+    }
 
-    await _createPeerConnection();
+    // Close all connections ending with '_screen' where I am the caller
+    final keysToRemove = _connections.keys.where((k) => k.startsWith('${_myUid}_') && k.endsWith('_screen')).toList();
+    for (final key in keysToRemove) {
+      await _connections[key]?.dispose();
+      _connections.remove(key);
+      _cleanupSignaling(key);
+    }
+    _notifyStreamsChanged();
+  }
+  
+  Future<void> _establishConnection(String connectionId, bool isCaller, MediaStream streamToSend, String targetUid) async {
+    final pc = await createPeerConnection(configuration, offerSdpConstraints);
+    final state = PeerConnectionState(pc);
+    _connections[connectionId] = state;
 
-    final roomRef = _firestore.collection('meetings').doc(roomId);
-    final callerCandidatesCollection = roomRef.collection('callerCandidates');
-
-    peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      debugPrint('[WebRTC] Host ICE candidate generated');
-      callerCandidatesCollection.add(candidate.toMap());
+    pc.onTrack = (event) {
+      if (event.track.kind == 'video' || event.track.kind == 'audio') {
+        if (event.streams.isNotEmpty) {
+          state.remoteStream ??= event.streams.first;
+        } else {
+          // If streams array is empty, we must create one.
+          // However, flutter_webrtc usually provides onAddStream for this.
+        }
+        _notifyStreamsChanged();
+      }
     };
 
-    RTCSessionDescription offer = await peerConnection!.createOffer();
-    await peerConnection!.setLocalDescription(offer);
-    debugPrint('[WebRTC] Offer created and set as local description');
-
-    await roomRef.update({'offer': offer.toMap()});
-    debugPrint('[WebRTC] Offer written to Firestore');
-
-    // Listen for remote answer
-    _roomSubscription = roomRef.snapshots().listen((snapshot) async {
-      if (snapshot.exists) {
-        final data = snapshot.data() as Map<String, dynamic>;
-        if (!_remoteDescriptionSet && data['answer'] != null) {
-          debugPrint('[WebRTC] Answer received from Firestore');
-          try {
-            var answer = RTCSessionDescription(
-              data['answer']['sdp'],
-              data['answer']['type'],
-            );
-            await peerConnection?.setRemoteDescription(answer);
-            _remoteDescriptionSet = true;
-            debugPrint('[WebRTC] Remote description (answer) set');
-
-            // Drain any ICE candidates that arrived before the answer.
-            await _drainPendingCandidates();
-          } catch (e) {
-            debugPrint('[WebRTC] Failed to set remote description (answer): $e');
-          }
-        }
-      }
-    });
-
-    // Listen for remote ICE candidates
-    _candidateSubscription = roomRef.collection('calleeCandidates').snapshots().listen((snapshot) {
-      for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          debugPrint('[WebRTC] Callee ICE candidate received');
-          final data = change.doc.data() as Map<String, dynamic>;
-          _addIceCandidate(
-            RTCIceCandidate(
-              data['candidate'],
-              data['sdpMid'],
-              data['sdpMLineIndex'],
-            ),
-          );
-        }
-      }
-    });
-  }
-
-  /// Called by the GUEST to create an answer to an existing offer.
-  Future<void> createAnswer(String meetingId) async {
-    if (_disposed) return;
-    if (localStream == null) {
-      throw 'Local stream not ready — call initLocalStream() first.';
-    }
-    debugPrint('[WebRTC] Guest creating answer for meeting: $meetingId');
-    roomId = meetingId;
-    await _createPeerConnection();
-
-    final roomRef = _firestore.collection('meetings').doc(roomId);
-    final calleeCandidatesCollection = roomRef.collection('calleeCandidates');
-
-    peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      debugPrint('[WebRTC] Guest ICE candidate generated');
-      calleeCandidatesCollection.add(candidate.toMap());
+    pc.onAddStream = (stream) {
+      state.remoteStream = stream;
+      _notifyStreamsChanged();
     };
 
-    // Listen for the offer from the host (caller).
-    // The offer may not exist yet if both participants joined simultaneously.
-    _roomSubscription = roomRef.snapshots().listen((snapshot) async {
-      if (snapshot.exists) {
-        final data = snapshot.data() as Map<String, dynamic>;
-        if (!_remoteDescriptionSet && data['offer'] != null) {
-          debugPrint('[WebRTC] Offer received from Firestore');
-          try {
-            var offer = RTCSessionDescription(
-              data['offer']['sdp'],
-              data['offer']['type'],
-            );
-            await peerConnection?.setRemoteDescription(offer);
-            _remoteDescriptionSet = true;
-            debugPrint('[WebRTC] Remote description (offer) set');
+    streamToSend.getTracks().forEach((track) {
+      pc.addTrack(track, streamToSend);
+    });
 
-            // Drain any ICE candidates that arrived before the offer.
-            await _drainPendingCandidates();
+    final docRef = _firestore.collection('meetings').doc(_roomId).collection('connections').doc(connectionId);
+    final callerCandidates = docRef.collection('callerCandidates');
+    final calleeCandidates = docRef.collection('calleeCandidates');
 
-            var answer = await peerConnection!.createAnswer();
-            await peerConnection!.setLocalDescription(answer);
-            debugPrint('[WebRTC] Answer created and set as local description');
+    pc.onIceCandidate = (candidate) {
+      if (isCaller) {
+        callerCandidates.add(candidate.toMap());
+      } else {
+        calleeCandidates.add(candidate.toMap());
+      }
+    };
 
-            await roomRef.update({'answer': answer.toMap()});
-            debugPrint('[WebRTC] Answer written to Firestore');
-          } catch (e) {
-            debugPrint('[WebRTC] Failed to process offer: $e');
+    if (isCaller) {
+      // 1. Clean stale data
+      await _cleanupSignaling(connectionId);
+      
+      // 2. Create Offer
+      final offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await docRef.set({'offer': offer.toMap()});
+
+      // 3. Listen for Answer
+      state.documentSub = docRef.snapshots().listen((snapshot) async {
+        if (snapshot.exists) {
+          final data = snapshot.data();
+          if (data != null && data['answer'] != null && !state.remoteDescriptionSet) {
+            final answer = RTCSessionDescription(data['answer']['sdp'], data['answer']['type']);
+            await pc.setRemoteDescription(answer);
+            state.remoteDescriptionSet = true;
+            _drainPendingCandidates(state);
           }
         }
-      }
-    });
+      });
 
-    // Listen for remote ICE candidates
-    _candidateSubscription = roomRef.collection('callerCandidates').snapshots().listen((snapshot) {
-      for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          debugPrint('[WebRTC] Caller ICE candidate received');
-          final data = change.doc.data() as Map<String, dynamic>;
-          _addIceCandidate(
-            RTCIceCandidate(
-              data['candidate'],
-              data['sdpMid'],
-              data['sdpMLineIndex'],
-            ),
-          );
+      // 4. Listen for Callee Candidates
+      state.calleeCandidateSub = calleeCandidates.snapshots().listen((snapshot) {
+        for (var change in snapshot.docChanges) {
+          if (change.type == DocumentChangeType.added) {
+            final data = change.doc.data() as Map<String, dynamic>;
+            _addIceCandidate(state, RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex']));
+          }
         }
-      }
-    });
+      });
+    } else {
+      // 1. Listen for Offer
+      state.documentSub = docRef.snapshots().listen((snapshot) async {
+        if (snapshot.exists) {
+          final data = snapshot.data();
+          if (data != null && data['offer'] != null && !state.remoteDescriptionSet) {
+            final offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
+            await pc.setRemoteDescription(offer);
+            state.remoteDescriptionSet = true;
+            _drainPendingCandidates(state);
+
+            final answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await docRef.update({'answer': answer.toMap()});
+          }
+        }
+      });
+
+      // 2. Listen for Caller Candidates
+      state.callerCandidateSub = callerCandidates.snapshots().listen((snapshot) {
+        for (var change in snapshot.docChanges) {
+          if (change.type == DocumentChangeType.added) {
+            final data = change.doc.data() as Map<String, dynamic>;
+            _addIceCandidate(state, RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex']));
+          }
+        }
+      });
+    }
   }
 
-  /// Toggles the local microphone.
+  Future<void> _addIceCandidate(PeerConnectionState state, RTCIceCandidate candidate) async {
+    if (state.remoteDescriptionSet) {
+      await state.peerConnection.addCandidate(candidate);
+    } else {
+      state.pendingCandidates.add(candidate);
+    }
+  }
+
+  Future<void> _drainPendingCandidates(PeerConnectionState state) async {
+    for (final candidate in state.pendingCandidates) {
+      await state.peerConnection.addCandidate(candidate);
+    }
+    state.pendingCandidates.clear();
+  }
+
+  Future<void> _cleanupSignaling(String connectionId) async {
+    if (_roomId == null) return;
+    final docRef = _firestore.collection('meetings').doc(_roomId).collection('connections').doc(connectionId);
+    try { await docRef.delete(); } catch (_) {}
+    try {
+      final caller = await docRef.collection('callerCandidates').get();
+      for (var doc in caller.docs) await doc.reference.delete();
+      final callee = await docRef.collection('calleeCandidates').get();
+      for (var doc in callee.docs) await doc.reference.delete();
+    } catch (_) {}
+  }
+
+  /// Remove peer (e.g. when they leave)
+  Future<void> removePeer(String remoteUid) async {
+    final keysToRemove = _connections.keys.where((k) => k.contains(remoteUid)).toList();
+    for (final key in keysToRemove) {
+      await _connections[key]?.dispose();
+      _connections.remove(key);
+    }
+    _notifyStreamsChanged();
+  }
+
+  /// Clean up all connections for current meeting
+  Future<void> cleanupSignalingRoom(String meetingId) async {
+    // Only cleanup connections where I am caller
+    for (final key in _connections.keys) {
+      if (key.startsWith('${_myUid}_')) {
+        await _cleanupSignaling(key);
+      }
+    }
+  }
+  
   void toggleMicrophone(bool enabled) {
     if (localStream != null) {
-      final audioTracks = localStream!.getAudioTracks();
-      for (var track in audioTracks) {
-        track.enabled = enabled;
-      }
+      for (var track in localStream!.getAudioTracks()) track.enabled = enabled;
     }
   }
 
-  /// Toggles the local camera.
   void toggleCamera(bool enabled) {
     if (localStream != null) {
-      final videoTracks = localStream!.getVideoTracks();
-      for (var track in videoTracks) {
-        track.enabled = enabled;
-      }
+      for (var track in localStream!.getVideoTracks()) track.enabled = enabled;
     }
   }
 
-  /// Switches between front and back camera.
   Future<void> switchCamera() async {
     if (localStream != null) {
       final videoTrack = localStream!.getVideoTracks().firstOrNull;
@@ -413,65 +360,33 @@ class WebRTCService {
     }
   }
 
-  /// Replaces the video track being sent to the remote peer.
-  ///
-  /// Used for screen sharing — swaps camera track with display track
-  /// and vice versa without renegotiation.
-  Future<void> replaceVideoTrack(MediaStreamTrack newTrack) async {
-    final senders = await peerConnection?.getSenders();
-    if (senders == null) return;
-    for (final sender in senders) {
-      if (sender.track?.kind == 'video') {
-        await sender.replaceTrack(newTrack);
-        debugPrint('[WebRTC] Video track replaced');
-        return;
+  void muteRemoteAudio(bool mute) {
+    for (final state in _connections.values) {
+      if (state.remoteStream != null) {
+        final audioTracks = state.remoteStream!.getAudioTracks();
+        for (final track in audioTracks) {
+          track.enabled = !mute;
+        }
       }
     }
   }
 
-  /// Mutes or unmutes the remote audio track.
-  ///
-  /// When translation is enabled, the remote audio is muted so the user
-  /// only hears the synthesized translated speech (via just_audio).
-  /// When translation is disabled, the remote audio is restored.
-  void muteRemoteAudio(bool mute) {
-    if (_remoteStream == null) return;
-    final audioTracks = _remoteStream!.getAudioTracks();
-    for (final track in audioTracks) {
-      track.enabled = !mute;
-      debugPrint('[WebRTC] Remote audio track ${mute ? "muted" : "unmuted"}');
-    }
-  }
-
-
-  /// Cleans up all resources. Safe to call multiple times.
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    debugPrint('[WebRTC] Disposing WebRTCService');
-
-    localStream?.getTracks().forEach((track) => track.stop());
+    for (final state in _connections.values) {
+      await state.dispose();
+    }
+    _connections.clear();
+    
+    localStream?.getTracks().forEach((t) => t.stop());
     await localStream?.dispose();
-    localStream = null;
-
-    await _remoteStream?.dispose();
-    _remoteStream = null;
-
-    _remoteDescriptionSet = false;
-    _pendingCandidates.clear();
-
-    await peerConnection?.close();
-    peerConnection = null;
-
-    await _roomSubscription?.cancel();
-    _roomSubscription = null;
-
-    await _candidateSubscription?.cancel();
-    _candidateSubscription = null;
-
-    _remoteStreamController.close();
-    _connectionStateController.close();
-
-    debugPrint('[WebRTC] WebRTCService disposed');
+    
+    if (localScreenStream != null) {
+      localScreenStream!.getTracks().forEach((t) => t.stop());
+      await localScreenStream!.dispose();
+    }
+    
+    _remoteStreamsController.close();
   }
 }

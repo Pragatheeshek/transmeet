@@ -4,19 +4,8 @@ const isMockMode = () => process.env.TRANSLATION_MOCK_MODE === 'true';
 
 // Language code to Google TTS voice mapping
 const VOICE_MAP = {
-  'en': { languageCode: 'en-US', name: 'en-US-Standard-C' },
-  'ta': { languageCode: 'ta-IN', name: 'ta-IN-Standard-A' },
-  'hi': { languageCode: 'hi-IN', name: 'hi-IN-Standard-A' },
-  'te': { languageCode: 'te-IN', name: 'te-IN-Standard-A' },
-  'ml': { languageCode: 'ml-IN', name: 'ml-IN-Standard-A' },
-  'kn': { languageCode: 'kn-IN', name: 'kn-IN-Standard-A' },
-  'es': { languageCode: 'es-ES', name: 'es-ES-Standard-A' },
-  'fr': { languageCode: 'fr-FR', name: 'fr-FR-Standard-A' },
-  'de': { languageCode: 'de-DE', name: 'de-DE-Standard-A' },
-  'it': { languageCode: 'it-IT', name: 'it-IT-Standard-A' },
-  'pt': { languageCode: 'pt-BR', name: 'pt-BR-Standard-A' },
-  'ja': { languageCode: 'ja-JP', name: 'ja-JP-Standard-A' },
-  'zh': { languageCode: 'cmn-CN', name: 'cmn-CN-Standard-A' },
+  'en-GB': { languageCode: 'en-GB', name: 'en-GB-Standard-A' },
+  'ta-IN': { languageCode: 'ta-IN', name: 'ta-IN-Standard-A' },
 };
 
 // A minimal valid WAV file (44 bytes header + ~100ms silence at 16kHz mono)

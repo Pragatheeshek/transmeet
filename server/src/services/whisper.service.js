@@ -34,15 +34,15 @@ async function transcribe(audioBuffer, originalName = 'audio.wav') {
     fs.writeFileSync(tempPath, audioBuffer);
 
     const t1 = Date.now();
-    const openai = new OpenAI({ 
+    const openai = new OpenAI({
       apiKey,
-      baseURL: 'https://api.groq.com/openai/v1' 
+      baseURL: 'https://api.groq.com/openai/v1'
     });
     const response = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempPath),
       model: 'whisper-large-v3-turbo',
       response_format: 'verbose_json',
-      prompt: 'The speaker is speaking in either English, Tamil (தமிழ்), or Malayalam (മലയാളം).',
+      prompt: 'The speaker is speaking in either English or Tamil (தமிழ்). Do not transcribe in any other language.',
     });
 
     const latency = Date.now() - t1;

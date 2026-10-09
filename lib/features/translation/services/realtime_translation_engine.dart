@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -57,6 +58,25 @@ class RealtimeTranslationEngine {
   String get targetLanguageName => _targetLanguageName;
   bool get isRunning => _isRunning;
 
+  /// Update the target language dynamically.
+  Future<void> changeTargetLanguage(String langCode) async {
+    _targetLanguageCode = langCode;
+    _targetLanguageName = TranslationLanguage.codeToName(langCode) ?? langCode;
+    debugPrint('[TranslationEngine] Changed target language to $_targetLanguageName');
+    
+    // Persist to user profile if logged in
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        await _firestore.collection('users').doc(user.uid).set({
+          'preferredLanguageCode': langCode,
+        }, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('[TranslationEngine] Failed to save preferred language: $e');
+      }
+    }
+  }
+
   /// Queue of base64 audio segments to speak in order.
   final List<String> _speakQueue = [];
 
@@ -84,6 +104,19 @@ class RealtimeTranslationEngine {
   /// Emits status updates.
   final _statusController = StreamController<String>.broadcast();
   Stream<String> get onStatus => _statusController.stream;
+
+  /// Emits when TTS playback starts/stops.
+  final _speakingStateController = StreamController<bool>.broadcast();
+  Stream<bool> get onSpeakingStateChanged => _speakingStateController.stream;
+
+  void _setSpeaking(bool speaking) {
+    if (_isSpeaking == speaking) return;
+    _isSpeaking = speaking;
+    if (!_isDisposed) _speakingStateController.add(speaking);
+  }
+
+  /// Whether TTS playback is enabled. If false, we skip synthesizing audio.
+  bool enableTts = false;
 
   /// Backend base URL for translation API.
   String get _backendBaseUrl => AppConstants.backendBaseUrl;
@@ -147,12 +180,21 @@ class RealtimeTranslationEngine {
   /// Initialize audio player.
   Future<void> _initTts() async {
     try {
-      _audioPlayer.playerStateStream.listen((state) {
-        if (state.processingState == ProcessingState.completed) {
-          _isSpeaking = false;
-          _processQueue();
-        }
-      });
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+        androidAudioAttributes: AndroidAudioAttributes(
+          usage: AndroidAudioUsage.voiceCommunication,
+          contentType: AndroidAudioContentType.speech,
+          flags: AndroidAudioFlags.none,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
+        androidWillPauseWhenDucked: true,
+      ));
       debugPrint('[TranslationEngine] AudioPlayer initialized for Google TTS');
     } catch (e) {
       debugPrint('[TranslationEngine] AudioPlayer init error: $e');
@@ -169,7 +211,7 @@ class RealtimeTranslationEngine {
     _processedDocIds.clear();
     _lastTranslatedText = '';
     await _audioPlayer.stop();
-    _isSpeaking = false;
+    _setSpeaking(false);
     _emitStatus('Translation paused');
   }
 
@@ -200,7 +242,8 @@ class RealtimeTranslationEngine {
     try {
       String translatedText;
 
-      if (sourceLanguage == _targetLanguageCode) {
+      if (TranslationLanguage.baseCode(sourceLanguage) == 
+          TranslationLanguage.baseCode(_targetLanguageCode)) {
         translatedText = trimmedText;
         debugPrint('[TranslationEngine] Source == target, no translation needed');
       } else {
@@ -248,22 +291,24 @@ class RealtimeTranslationEngine {
       }
 
       // Call backend synthesize API
-      _emitStatus('Synthesizing...');
-      final audioContent = await _synthesizeViaBackend(translatedText, _targetLanguageCode);
+      if (enableTts) {
+        _emitStatus('Synthesizing...');
+        final audioContent = await _synthesizeViaBackend(translatedText, _targetLanguageCode);
 
-      // Queue for TTS playback
-      if (_isRunning && !_isDisposed && audioContent.isNotEmpty) {
-        final t6 = DateTime.now(); // T6: TTS request sent
-        _speakQueue.add(audioContent);
-        _processQueue();
+        // Queue for TTS playback
+        if (_isRunning && !_isDisposed && audioContent.isNotEmpty) {
+          final t6 = DateTime.now(); // T6: TTS request sent
+          _speakQueue.add(audioContent);
+          _processQueue();
 
-        final t7 = DateTime.now(); // T7: TTS queued
-        final ttsStartup = t7.difference(t6).inMilliseconds;
-        final totalLatency = t7.difference(t1).inMilliseconds;
+          final t7 = DateTime.now(); // T7: TTS queued
+          final ttsStartup = t7.difference(t6).inMilliseconds;
+          final totalLatency = t7.difference(t1).inMilliseconds;
 
-        debugPrint('[Translation Latency]');
-        debugPrint('  Total end-to-end: ${totalLatency}ms');
-        debugPrint('  TTS startup (network): ${ttsStartup}ms');
+          debugPrint('[Translation Latency]');
+          debugPrint('  Total end-to-end: ${totalLatency}ms');
+          debugPrint('  TTS startup (network): ${ttsStartup}ms');
+        }
       }
 
       _emitStatus('Listening for speech...');
@@ -325,6 +370,9 @@ class RealtimeTranslationEngine {
   /// Single translation attempt.
   Future<String> _translateViaBackendSingle(
       String text, String from, String to, Duration timeout) async {
+    final safeFrom = TranslationLanguage.nameToCode(from) ?? from;
+    final safeTo = TranslationLanguage.nameToCode(to) ?? to;
+
     final url = Uri.parse('$_backendBaseUrl/api/translation/translate');
 
     final response = await _httpClient
@@ -333,8 +381,8 @@ class RealtimeTranslationEngine {
           headers: {'Content-Type': 'application/json'},
           body: json.encode({
             'text': text,
-            'sourceLanguage': from,
-            'targetLanguage': to,
+            'sourceLanguage': safeFrom == 'auto' ? 'auto' : TranslationLanguage.baseCode(safeFrom),
+            'targetLanguage': TranslationLanguage.baseCode(safeTo),
           }),
         )
         .timeout(timeout);
@@ -384,6 +432,7 @@ class RealtimeTranslationEngine {
   /// Synthesize text to speech via backend
   Future<String> _synthesizeViaBackend(String text, String to) async {
     try {
+      final safeTo = TranslationLanguage.nameToCode(to) ?? to;
       final url = Uri.parse('$_backendBaseUrl/api/translation/synthesize');
       final response = await _httpClient
           .post(
@@ -391,7 +440,7 @@ class RealtimeTranslationEngine {
             headers: {'Content-Type': 'application/json'},
             body: json.encode({
               'text': text,
-              'languageCode': to,
+              'languageCode': safeTo,
             }),
           )
           .timeout(const Duration(seconds: 15));
@@ -408,25 +457,42 @@ class RealtimeTranslationEngine {
 
   /// Process the TTS speak queue sequentially.
   Future<void> _processQueue() async {
-    if (_isSpeaking || _speakQueue.isEmpty || _isDisposed || !_isRunning) {
+    if (_isSpeaking || _isDisposed || !_isRunning) {
       return;
     }
-    _isSpeaking = true;
-    final base64Audio = _speakQueue.removeAt(0);
+    _setSpeaking(true);
 
-    try {
-      final bytes = base64Decode(base64Audio);
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/tts_output_${DateTime.now().millisecondsSinceEpoch}.mp3');
-      await tempFile.writeAsBytes(bytes);
+    while (_speakQueue.isNotEmpty && !_isDisposed && _isRunning) {
+      final base64Audio = _speakQueue.removeAt(0);
 
-      await _audioPlayer.setFilePath(tempFile.path);
-      await _audioPlayer.play();
-    } catch (e) {
-      debugPrint('[TranslationEngine] Audio playback error: $e');
-      _isSpeaking = false;
-      _processQueue();
+      try {
+        final bytes = base64Decode(base64Audio);
+        final tempDir = await getTemporaryDirectory();
+        final tempFile = File('${tempDir.path}/tts_output_${DateTime.now().millisecondsSinceEpoch}.mp3');
+        await tempFile.writeAsBytes(bytes);
+
+        await _audioPlayer.setFilePath(tempFile.path);
+        
+        _audioPlayer.play();
+        
+        // Wait until playback finishes
+        await _audioPlayer.processingStateStream.firstWhere(
+            (state) => state == ProcessingState.completed);
+            
+        // Ensure player is stopped before loading the next file
+        await _audioPlayer.stop();
+        await _audioPlayer.seek(Duration.zero);
+        
+        // Small gap between sentences to make it sound natural
+        await Future.delayed(const Duration(milliseconds: 300));
+      } catch (e) {
+        debugPrint('[TranslationEngine] Audio playback error: $e');
+        // Wait a bit on error before trying the next one to avoid rapid crash loops
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
     }
+
+    _setSpeaking(false);
   }
 
   /// Load the user's preferred language.
@@ -473,5 +539,6 @@ class RealtimeTranslationEngine {
     await _resultController.close();
     await _errorController.close();
     await _statusController.close();
+    await _speakingStateController.close();
   }
 }

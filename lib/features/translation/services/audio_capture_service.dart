@@ -39,9 +39,28 @@ class AudioCaptureService {
 
   bool _isRunning = false;
   bool _isDisposed = false;
+  bool _isPaused = false;
 
   /// Whether the capture is currently active.
   bool get isRunning => _isRunning;
+
+  /// Pauses or resumes the audio capture (e.g. to prevent recording TTS output).
+  Future<void> pauseCapture(bool pause) async {
+    if (_isPaused == pause) return;
+    _isPaused = pause;
+    debugPrint('[AudioCapture] Capture paused: $pause');
+    if (_isRunning && !_isDisposed) {
+      try {
+        if (pause && await _recorder.isRecording()) {
+          await _recorder.pause();
+        } else if (!pause && await _recorder.isPaused()) {
+          await _recorder.resume();
+        }
+      } catch (e) {
+        debugPrint('[AudioCapture] Pause/resume error: $e');
+      }
+    }
+  }
 
   /// Emits error messages for UI display.
   final _errorController = StreamController<String>.broadcast();
@@ -145,8 +164,12 @@ class AudioCaptureService {
           path: segmentPath,
         );
 
-        // Wait for the segment duration
-        await Future.delayed(_segmentDuration);
+        // Wait for the segment duration in 100ms chunks to allow mid-segment pause/resume
+        final chunks = _segmentDuration.inMilliseconds ~/ 100;
+        for (int i = 0; i < chunks; i++) {
+          if (!_isRunning || _isDisposed) break;
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
 
         // Stop recording — returns the file path (or null on error)
         final resultPath = await _recorder.stop();
