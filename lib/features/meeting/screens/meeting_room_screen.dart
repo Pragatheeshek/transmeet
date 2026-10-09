@@ -120,9 +120,14 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         if (mounted) setState(() {});
       },
     );
-    _initPhaseA();
-    _initPhaseB();
-    _listenMeetingStatus();
+    // Defer heavy initialization to allow the page transition to complete smoothly
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (mounted) {
+        _initPhaseA();
+        _initPhaseB();
+        _listenMeetingStatus();
+      }
+    });
   }
 
   @override

@@ -72,9 +72,10 @@ class _TranslationOverlayState extends State<TranslationOverlay>
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
-    )..repeat(reverse: true);
+    );
 
     if (widget.isCaptionsEnabled || widget.isTtsEnabled) {
+      _pulseController.repeat(reverse: true);
       _startServices(); // async — intentionally not awaited; runs in background.
     }
   }
@@ -86,8 +87,10 @@ class _TranslationOverlayState extends State<TranslationOverlay>
     final isEnabled = widget.isCaptionsEnabled || widget.isTtsEnabled;
 
     if (isEnabled && !wasEnabled) {
+      _pulseController.repeat(reverse: true);
       _startServices();
     } else if (!isEnabled && wasEnabled) {
+      _pulseController.stop();
       _stopServices();
     }
 
