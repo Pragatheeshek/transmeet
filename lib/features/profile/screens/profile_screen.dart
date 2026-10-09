@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:transmeet/core/constants/app_constants.dart';
 import 'package:transmeet/core/services/auth_service.dart';
+import 'package:transmeet/features/auth/login_screen.dart';
 
 /// Profile screen for the authenticated user.
 ///
@@ -61,7 +62,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     try {
       await _authService.signOut();
-      // Navigation is handled by main.dart StreamBuilder.
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)

@@ -53,6 +53,7 @@ class AppConstants {
   static const List<String> supportedLanguages = [
     'English',
     'Tamil',
+    'Malayalam',
   ];
 
   static const String selectLanguage = 'Select Language';

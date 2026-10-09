@@ -15,6 +15,7 @@ class TranslationLanguage {
   static const List<TranslationLanguage> supportedLanguages = [
     TranslationLanguage(code: 'en', name: 'English'),
     TranslationLanguage(code: 'ta', name: 'Tamil'),
+    TranslationLanguage(code: 'ml', name: 'Malayalam'),
   ];
 
   /// Looks up a [TranslationLanguage] by its code.

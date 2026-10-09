@@ -156,6 +156,8 @@ class _MeetingLobbyScreenState extends State<MeetingLobbyScreen> {
         isHost: false,
         preferredLanguage: preferredLanguage,
         initialStatus: 'waiting',
+        isCameraOn: _isCameraOn,
+        isMicOn: _isMicOn,
       );
 
       // Listen for status changes

@@ -6,6 +6,10 @@ const isMockMode = () => process.env.TRANSLATION_MOCK_MODE === 'true';
 const MOCK_TRANSLATIONS = {
   'en-ta': { 'Hello, how are you?': 'வணக்கம், எப்படி இருக்கிறீர்கள்?' },
   'ta-en': { 'வணக்கம், எப்படி இருக்கிறீர்கள்?': 'Hello, how are you?' },
+  'en-ml': { 'Hello, how are you?': 'ഹലോ, സുഖമാണോ?' },
+  'ml-en': { 'ഹലോ, സുഖമാണോ?': 'Hello, how are you?' },
+  'ta-ml': { 'வணக்கம், எப்படி இருக்கிறீர்கள்?': 'ഹലോ, സുഖമാണോ?' },
+  'ml-ta': { 'ഹലോ, സുഖമാണോ?': 'வணக்கம், எப்படி இருக்கிறீர்கள்?' },
 };
 
 /**

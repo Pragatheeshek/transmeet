@@ -52,6 +52,8 @@ class ParticipantService {
     required bool isHost,
     required String preferredLanguage,
     String initialStatus = 'joined',
+    bool isCameraOn = true,
+    bool isMicOn = true,
   }) async {
     final user = _auth.currentUser;
     if (user == null) throw 'User not authenticated';
@@ -69,8 +71,8 @@ class ParticipantService {
       'email': user.email ?? '',
       'preferredLanguage': preferredLanguage,
       'isHost': isHost,
-      'isCameraOn': true,
-      'isMicOn': true,
+      'isCameraOn': isCameraOn,
+      'isMicOn': isMicOn,
       'status': initialStatus,
       'joinedAt': FieldValue.serverTimestamp(),
     });

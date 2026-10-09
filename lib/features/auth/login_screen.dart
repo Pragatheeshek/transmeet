@@ -3,6 +3,7 @@ import 'package:transmeet/core/services/auth_service.dart';
 import 'package:transmeet/features/auth/register_screen.dart';
 import 'package:transmeet/features/auth/widgets/auth_text_field.dart';
 import 'package:transmeet/features/auth/widgets/social_login_button.dart';
+import 'package:transmeet/features/home/home_screen.dart';
 import 'package:transmeet/widgets/loading_button.dart';
 
 /// Login screen for TransMeet.
@@ -46,7 +47,11 @@ class _LoginScreenState extends State<LoginScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
-      // Navigation is handled by the auth state listener in main.dart.
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
@@ -66,6 +71,10 @@ class _LoginScreenState extends State<LoginScreen> {
       final credential = await _authService.signInWithGoogle();
       if (credential == null && mounted) {
         _showError('Google Sign-In was cancelled.');
+      } else if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
       }
     } catch (e) {
       if (!mounted) return;

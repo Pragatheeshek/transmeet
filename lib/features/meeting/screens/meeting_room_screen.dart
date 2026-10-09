@@ -1047,7 +1047,9 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
     final localStream = _webRTCService.localStream;
     // When screen sharing, show the screen stream instead of camera
     final displayStream = _isScreenSharing ? _screenStream : localStream;
-    final hasVideo = displayStream != null && (!_isCameraOff || _isScreenSharing);
+    
+    final hasVideoTracks = displayStream?.getVideoTracks().isNotEmpty ?? false;
+    final hasVideo = displayStream != null && hasVideoTracks && (!_isCameraOff || _isScreenSharing);
 
     return Container(
       margin: const EdgeInsets.all(8),
@@ -1223,7 +1225,8 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
     bool isCompact = false,
   }) {
-    final hasVideo = stream != null && !isCameraOff;
+    final hasVideoTracks = stream?.getVideoTracks().isNotEmpty ?? false;
+    final hasVideo = stream != null && hasVideoTracks && !isCameraOff;
 
     return Container(
       decoration: BoxDecoration(

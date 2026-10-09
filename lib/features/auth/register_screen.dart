@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:transmeet/core/services/auth_service.dart';
 import 'package:transmeet/features/auth/widgets/auth_text_field.dart';
 import 'package:transmeet/features/auth/widgets/social_login_button.dart';
+import 'package:transmeet/features/home/home_screen.dart';
 import 'package:transmeet/widgets/loading_button.dart';
 
 /// Registration screen for TransMeet.
@@ -55,8 +56,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       // Set the display name on the newly created Firebase user.
       await credential.user?.updateDisplayName(_nameController.text.trim());
 
-      // Pop back so the auth state listener in main.dart navigates to Home.
-      if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+          (route) => false,
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       _showError(e.toString());
@@ -77,7 +82,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (credential == null && mounted) {
         _showError('Google Sign-In was cancelled.');
       } else if (mounted) {
-        Navigator.of(context).pop();
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+          (route) => false,
+        );
       }
     } catch (e) {
       if (!mounted) return;

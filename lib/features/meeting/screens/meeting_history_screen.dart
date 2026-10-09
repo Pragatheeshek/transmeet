@@ -30,8 +30,6 @@ class MeetingHistoryScreen extends StatelessWidget {
                 stream: FirebaseFirestore.instance
                     .collection('meetings')
                     .where('hostUid', isEqualTo: user.uid)
-                    .orderBy('createdAt', descending: true)
-                    .limit(50)
                     .snapshots(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
@@ -79,6 +77,9 @@ class MeetingHistoryScreen extends StatelessWidget {
                   final meetings = docs
                       .map((doc) => MeetingModel.fromFirestore(doc))
                       .toList();
+                  
+                  // Sort locally by creation date descending
+                  meetings.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
                   return ListView.separated(
                     padding: const EdgeInsets.all(16),
