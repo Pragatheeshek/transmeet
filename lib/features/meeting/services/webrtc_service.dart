@@ -168,8 +168,8 @@ class WebRTCService {
     final connectionId = '${remoteUid}_${_myUid}_screen';
     if (_connections.containsKey(connectionId)) return;
 
-    // We can use localStream (or an empty stream) as we just need to receive
-    await _establishConnection(connectionId, false, localStream!, remoteUid);
+    // We pass null for streamToSend so we don't send our camera back on the screen share connection
+    await _establishConnection(connectionId, false, null, remoteUid);
   }
 
   /// Stop screen sharing and close all screen share connections.
@@ -197,7 +197,7 @@ class WebRTCService {
     _notifyStreamsChanged();
   }
   
-  Future<void> _establishConnection(String connectionId, bool isCaller, MediaStream streamToSend, String targetUid) async {
+  Future<void> _establishConnection(String connectionId, bool isCaller, MediaStream? streamToSend, String targetUid) async {
     final pc = await createPeerConnection(configuration, offerSdpConstraints);
     final state = PeerConnectionState(pc);
     _connections[connectionId] = state;
@@ -219,7 +219,7 @@ class WebRTCService {
       _notifyStreamsChanged();
     };
 
-    streamToSend.getTracks().forEach((track) {
+    streamToSend?.getTracks().forEach((track) {
       pc.addTrack(track, streamToSend);
     });
 

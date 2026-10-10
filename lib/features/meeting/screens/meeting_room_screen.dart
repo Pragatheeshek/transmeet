@@ -442,14 +442,11 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         if (mounted) setState(() => _isScreenSharing = true);
         debugPrint('[Meeting] Screen sharing started');
 
-        // Poll for track end — onEnded is unreliable on Android
+        // Check if screen share was stopped externally (e.g. from system notification or onEnded)
         _screenShareCheckTimer?.cancel();
         _screenShareCheckTimer =
             Timer.periodic(const Duration(seconds: 1), (_) {
-          final tracks = _webRTCService.localScreenStream?.getVideoTracks();
-          if (tracks == null ||
-              tracks.isEmpty ||
-              !tracks.first.enabled) {
+          if (_webRTCService.localScreenStream == null) {
             if (_isScreenSharing && mounted) {
               _toggleScreenShare();
             }
@@ -1179,20 +1176,66 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       );
     }
 
-    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
-
-    return Padding(
-      padding: const EdgeInsets.all(6),
-      child: GridView.builder(
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: isLandscape ? (tiles.length > 2 ? 3 : 2) : (tiles.length > 2 ? 2 : 1),
-          crossAxisSpacing: 6,
-          mainAxisSpacing: 6,
-          childAspectRatio: isLandscape ? 1.5 : (tiles.length > 2 ? 1.0 : 1.2),
-        ),
-        itemCount: tiles.length,
-        itemBuilder: (context, index) => tiles[index],
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (tiles.isEmpty) return const SizedBox.shrink();
+        if (tiles.length == 1) {
+          return Padding(
+            padding: const EdgeInsets.all(6),
+            child: tiles.first,
+          );
+        }
+        
+        final isLandscape = constraints.maxWidth > constraints.maxHeight;
+        
+        int cols;
+        int rows;
+        
+        if (tiles.length == 2) {
+          cols = isLandscape ? 2 : 1;
+          rows = isLandscape ? 1 : 2;
+        } else if (tiles.length == 3 || tiles.length == 4) {
+          cols = 2;
+          rows = 2;
+        } else {
+          cols = isLandscape ? 3 : 2;
+          rows = (tiles.length / cols).ceil();
+        }
+        
+        List<Widget> rowWidgets = [];
+        int tileIndex = 0;
+        
+        for (int r = 0; r < rows; r++) {
+          List<Widget> colWidgets = [];
+          int tilesInThisRow = cols;
+          if (r == rows - 1 && tiles.length % cols != 0) {
+            tilesInThisRow = tiles.length % cols;
+          }
+          
+          for (int c = 0; c < tilesInThisRow; c++) {
+            if (tileIndex < tiles.length) {
+              colWidgets.add(Expanded(child: Padding(
+                padding: const EdgeInsets.all(3),
+                child: tiles[tileIndex],
+              )));
+              tileIndex++;
+            }
+          }
+          rowWidgets.add(Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: colWidgets,
+            ),
+          ));
+        }
+        
+        return Padding(
+          padding: const EdgeInsets.all(3),
+          child: Column(
+            children: rowWidgets,
+          ),
+        );
+      },
     );
   }
 
