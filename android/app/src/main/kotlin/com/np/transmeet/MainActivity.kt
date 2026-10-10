@@ -1,4 +1,4 @@
-package com.example.transmeet
+package com.np.transmeet
 
 import android.content.Intent
 import android.os.Build

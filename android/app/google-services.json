@@ -48,6 +48,50 @@
           ]
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:388941372461:android:9a721faddb0eb4f4ac6ca4",
+        "android_client_info": {
+          "package_name": "com.np.transmeet"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "388941372461-p23bhnn4vdqpmk1nk88du1dr9sdibv9a.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.np.transmeet",
+            "certificate_hash": "5da2c0347f879f4e2cd58c498dcc7397321671ae"
+          }
+        },
+        {
+          "client_id": "388941372461-4jbqros1tql933q2d4u2f8k9i3cos5pp.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDhdguaPF6ARQmPPqEDd3bdOTy5l-0d2Ho"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "388941372461-4jbqros1tql933q2d4u2f8k9i3cos5pp.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "388941372461-tdehblaus5shi945u6rhu2qhmj4fjnth.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.transmeet"
+              }
+            }
+          ]
+        }
+      }
     }
   ],
   "configuration_version": "1"

@@ -1,4 +1,4 @@
-package com.example.transmeet
+package com.np.transmeet
 
 import android.app.Notification
 import android.app.NotificationChannel
