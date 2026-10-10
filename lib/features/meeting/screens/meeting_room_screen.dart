@@ -18,6 +18,7 @@ import 'package:transmeet/features/meeting/widgets/admission_banner.dart';
 import 'package:transmeet/features/meeting/widgets/live_transcription_panel.dart';
 import 'package:transmeet/features/meeting/widgets/participant_panel.dart';
 import 'package:transmeet/features/meeting/widgets/webrtc_video_view.dart';
+import 'package:transmeet/features/translation/models/translation_language.dart';
 import 'package:transmeet/features/translation/services/audio_capture_service.dart';
 import 'package:transmeet/features/translation/widgets/translation_overlay.dart';
 
@@ -265,13 +266,22 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
         title: widget.meeting.title,
         text: 'Meeting in progress',
       );
-      // Start audio capture service for translation broadcast
       _captureService = AudioCaptureService();
       _captureErrorSub = _captureService!.onError.listen((error) {
         debugPrint('[Meeting] Capture error: $error');
       });
-      // Do NOT start automatically. Wait for user to toggle translation on.
-      
+      _captureService!.onTranscription.listen((data) {
+        if (!mounted || !_isLiveTranscriptionOn) return;
+        final text = data['text'] as String?;
+        if (text != null && text.isNotEmpty) {
+          addTranscriptionEntry('You', text);
+        }
+      });
+      // Start automatically so others can hear translations!
+      final myLangCode = TranslationLanguage.nameToCode(preferredLanguage) ?? 'en';
+      _captureService!.start(meetingId: widget.meeting.docId, preferredLanguage: myLangCode);
+      _captureService!.pauseCapture(_isMicMuted);
+
       _maybeStartWebRTC();
     } catch (e) {
       debugPrint('[Meeting] Phase B error: $e');
@@ -410,12 +420,6 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
 
   void _toggleTranslation() {
     setState(() => _isTranslationEnabled = !_isTranslationEnabled);
-    if (_isTranslationEnabled) {
-      _captureService?.start(meetingId: widget.meeting.docId);
-      _captureService?.pauseCapture(_isMicMuted);
-    } else {
-      _captureService?.stop();
-    }
   }
 
   Future<void> _toggleScreenShare() async {
@@ -840,25 +844,49 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
               if (_isHost && widget.meeting.admissionControl)
                 AdmissionBanner(meetingDocId: widget.meeting.docId),
 
-              // ── 3. Video area (fills remaining space) ──────────────────────
-              Expanded(child: _buildVideoArea()),
-
-              // ── 4. Translation overlay (above controls) ────────────────────
-              TranslationOverlay(
-                isCaptionsEnabled: _isLiveTranscriptionOn,
-                isTtsEnabled: _isTranslationEnabled,
-                meetingDocId: widget.meeting.docId,
-                onCaptionReceived: (speaker, text) => addTranscriptionEntry(speaker, text),
-                onMuteRemoteAudio: (mute) =>
-                    _webRTCService.muteRemoteAudio(mute),
-              ),
-
-              // ── Live Transcription panel ────────────────────────────────────
-              if (_isLiveTranscriptionOn)
-                LiveTranscriptionPanel(
-                  entries: _transcriptionEntries,
-                  onClose: _toggleLiveTranscription,
+              // ── 3. Video area and Overlays (fills remaining space) ────────────────
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: _buildVideoArea()),
+                    
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // ── Translation overlay (floats above bottom) ────────
+                          TranslationOverlay(
+                            isCaptionsEnabled: _isLiveTranscriptionOn,
+                            isTtsEnabled: _isTranslationEnabled,
+                            meetingDocId: widget.meeting.docId,
+                            onCaptionReceived: (speaker, text) =>
+                                addTranscriptionEntry(speaker, text),
+                            onMuteRemoteAudio: (mute) =>
+                                _webRTCService.muteRemoteAudio(mute),
+                            onTtsSpeakingStateChanged: (isSpeaking) {
+                              if (isSpeaking) {
+                                _captureService?.pauseCapture(true);
+                              } else {
+                                _captureService?.pauseCapture(_isMicMuted);
+                              }
+                            },
+                          ),
+                          
+                          // ── Live Transcription panel (floats below overlay) ──
+                          if (_isLiveTranscriptionOn)
+                            LiveTranscriptionPanel(
+                              entries: _transcriptionEntries,
+                              onClose: _toggleLiveTranscription,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
+              ),
 
               // ── 5. Bottom control bar ──────────────────────────────────────
               _buildBottomControlBar(),

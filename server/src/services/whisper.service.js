@@ -12,12 +12,12 @@ const isMockMode = () => process.env.TRANSLATION_MOCK_MODE === 'true';
  * @param {string} originalName - Original filename (used for extension detection)
  * @returns {Promise<{text: string, language: string}>}
  */
-async function transcribe(audioBuffer, originalName = 'audio.wav') {
+async function transcribe(audioBuffer, originalName = 'audio.wav', language = null) {
   if (isMockMode()) {
     console.log('[Whisper Mock] Returning mock transcription');
     return {
       text: 'Hello, how are you?',
-      language: 'en',
+      language: language || 'en',
     };
   }
 
@@ -38,12 +38,18 @@ async function transcribe(audioBuffer, originalName = 'audio.wav') {
       apiKey,
       baseURL: 'https://api.groq.com/openai/v1'
     });
-    const response = await openai.audio.transcriptions.create({
+    const options = {
       file: fs.createReadStream(tempPath),
       model: 'whisper-large-v3-turbo',
       response_format: 'verbose_json',
       prompt: 'The speaker is speaking in either English or Tamil (தமிழ்). Do not transcribe in any other language.',
-    });
+    };
+
+    if (language && language !== 'auto') {
+      options.language = language;
+    }
+
+    const response = await openai.audio.transcriptions.create(options);
 
     const latency = Date.now() - t1;
     console.log(

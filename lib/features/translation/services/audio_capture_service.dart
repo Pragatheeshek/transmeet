@@ -82,10 +82,13 @@ class AudioCaptureService {
   /// opening a second mic via the recorder.
   static const Duration _startupDelay = Duration(milliseconds: 1500);
 
+  String? _preferredLanguage;
+
   /// Starts real-time speech capture and Firestore broadcasting.
-  Future<void> start({required String meetingId}) async {
+  Future<void> start({required String meetingId, String? preferredLanguage}) async {
     if (_isRunning || _isDisposed) return;
     _meetingId = meetingId;
+    _preferredLanguage = preferredLanguage;
     _isRunning = true;
     _lastBroadcastText = '';
 
@@ -221,6 +224,7 @@ class AudioCaptureService {
       final result = await _apiClient.transcribe(
         audioBytes,
         filename: 'segment.m4a',
+        language: _preferredLanguage,
       );
 
       final text = (result['text'] as String? ?? '').trim();

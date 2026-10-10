@@ -24,6 +24,7 @@ class TranslationOverlay extends StatefulWidget {
     required this.meetingDocId,
     required this.onMuteRemoteAudio,
     required this.onCaptionReceived,
+    this.onTtsSpeakingStateChanged,
   });
 
   /// Whether captions should be passed to the listener.
@@ -40,6 +41,9 @@ class TranslationOverlay extends StatefulWidget {
 
   /// Callback to mute/unmute the remote WebRTC audio track.
   final ValueChanged<bool> onMuteRemoteAudio;
+
+  /// Callback when TTS starts/stops speaking.
+  final ValueChanged<bool>? onTtsSpeakingStateChanged;
 
   @override
   State<TranslationOverlay> createState() => _TranslationOverlayState();
@@ -172,9 +176,12 @@ class _TranslationOverlayState extends State<TranslationOverlay>
     _resultSub = _translationEngine!.onResult.listen((result) {
       if (mounted) {
         if (widget.isCaptionsEnabled) {
+          final displayText = result.originalText == result.translatedText
+              ? result.originalText
+              : '${result.originalText}\n[Translation] ${result.translatedText}';
           widget.onCaptionReceived(
-            'Remote',
-            result.translatedText,
+            result.speakerName,
+            displayText,
           );
         }
         setState(() {
@@ -195,7 +202,7 @@ class _TranslationOverlayState extends State<TranslationOverlay>
     });
 
     _speakingStateSub = _translationEngine!.onSpeakingStateChanged.listen((isSpeaking) {
-      // We don't pause capture service here anymore since it's managed externally.
+      widget.onTtsSpeakingStateChanged?.call(isSpeaking);
     });
 
     // Await engine start so the preferred language is loaded from Firestore

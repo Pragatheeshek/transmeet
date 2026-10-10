@@ -16,7 +16,8 @@ async function transcribe(req, res) {
       return res.status(400).json({ error: 'No audio file provided.' });
     }
 
-    const result = await whisperService.transcribe(req.file.buffer, req.file.originalname);
+    const language = req.body?.language;
+    const result = await whisperService.transcribe(req.file.buffer, req.file.originalname, language);
     const latency = Date.now() - t1;
     console.log(`[Transcribe] requestId=${requestId} latency=${latency}ms text="${result.text?.substring(0, 80)}"`);
     return res.json(result);

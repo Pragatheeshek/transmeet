@@ -163,13 +163,18 @@ class RealtimeTranslationEngine {
         final speakerUid = data['speakerUid'] as String? ?? '';
         if (speakerUid == myUid) continue; // Skip own speech
 
+        final speakerName = data['speakerName'] as String? ?? 'Remote';
         final text = data['text'] as String? ?? '';
         final detectedLanguage = data['detectedLanguage'] as String? ?? 'en';
 
         if (text.trim().isEmpty) continue;
 
-        debugPrint('[TranslationEngine] Received: "$text" ($detectedLanguage)');
-        _processTranscription(text: text, sourceLanguage: detectedLanguage);
+        debugPrint('[TranslationEngine] Received from $speakerName: "$text" ($detectedLanguage)');
+        _processTranscription(
+          text: text,
+          sourceLanguage: detectedLanguage,
+          speakerName: speakerName,
+        );
       }
     }, onError: (e) {
       debugPrint('[TranslationEngine] Firestore error: $e');
@@ -219,6 +224,7 @@ class RealtimeTranslationEngine {
   Future<void> _processTranscription({
     required String text,
     required String sourceLanguage,
+    required String speakerName,
   }) async {
     if (!_isRunning || _isDisposed) return;
 
@@ -283,6 +289,7 @@ class RealtimeTranslationEngine {
       // Emit caption for UI — immediately, don't wait for TTS
       if (!_isDisposed) {
         _resultController.add(TranslationResult.fromTranscriptionAndTranslation(
+          speakerName: speakerName,
           originalText: trimmedText,
           translatedText: translatedText,
           sourceLanguage: sourceLanguage,
@@ -471,13 +478,20 @@ class RealtimeTranslationEngine {
         final tempFile = File('${tempDir.path}/tts_output_${DateTime.now().millisecondsSinceEpoch}.mp3');
         await tempFile.writeAsBytes(bytes);
 
-        await _audioPlayer.setFilePath(tempFile.path);
+        final duration = await _audioPlayer.setFilePath(tempFile.path);
         
         _audioPlayer.play();
         
-        // Wait until playback finishes
-        await _audioPlayer.processingStateStream.firstWhere(
-            (state) => state == ProcessingState.completed);
+        if (duration != null) {
+          // Wait exactly the length of the audio plus a small buffer
+          await Future.delayed(duration + const Duration(milliseconds: 100));
+        } else {
+          try {
+            await _audioPlayer.processingStateStream.firstWhere(
+                (state) => state == ProcessingState.completed || state == ProcessingState.idle,
+            ).timeout(const Duration(seconds: 10));
+          } catch (_) {}
+        }
             
         // Ensure player is stopped before loading the next file
         await _audioPlayer.stop();

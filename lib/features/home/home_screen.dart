@@ -276,46 +276,30 @@ class _HomeScreenState extends State<HomeScreen> {
   /// - Side by side when the screen is wide enough (≥ 360dp each card).
   /// - Stacked vertically on narrow screens.
   Widget _buildActionCards(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final useRow = constraints.maxWidth >= 360;
-
-        final createCard = MeetingActionCard(
-          icon: Icons.videocam_rounded,
-          title: AppConstants.createMeeting,
-          subtitle: 'Start a new video meeting',
-          onTap: _openCreateMeeting,
-          isPrimary: true,
-        );
-
-        final joinCard = MeetingActionCard(
-          icon: Icons.link_rounded,
-          title: AppConstants.joinMeeting,
-          subtitle: 'Enter a meeting ID to join',
-          onTap: _openJoinMeeting,
-        );
-
-        if (useRow) {
-          return IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: createCard),
-                const SizedBox(width: 12),
-                Expanded(child: joinCard),
-              ],
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: MeetingActionCard(
+              icon: Icons.videocam_rounded,
+              title: AppConstants.createMeeting,
+              subtitle: 'Start a new video meeting',
+              onTap: _openCreateMeeting,
+              isPrimary: true,
             ),
-          );
-        }
-
-        return Column(
-          children: [
-            createCard,
-            const SizedBox(height: 12),
-            joinCard,
-          ],
-        );
-      },
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: MeetingActionCard(
+              icon: Icons.link_rounded,
+              title: AppConstants.joinMeeting,
+              subtitle: 'Enter a meeting ID to join',
+              onTap: _openJoinMeeting,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

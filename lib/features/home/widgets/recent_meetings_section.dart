@@ -107,8 +107,10 @@ class RecentMeetingsSection extends StatelessWidget {
           return _buildEmptyState(theme);
         }
 
+        final displayMeetings = meetings.take(5).toList();
+
         return Column(
-          children: meetings
+          children: displayMeetings
               .map(
                 (meeting) => MeetingCard(
                   meeting: meeting,

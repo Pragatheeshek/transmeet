@@ -54,10 +54,16 @@ class TranslationLanguage {
   /// Returns the ISO 639-1 base language code (e.g. 'en' for 'en-GB').
   /// This is required for Google Translate API, which often rejects regional codes.
   static String baseCode(String code) {
+    if (code.toLowerCase() == 'auto') return 'auto';
     final lowerCode = code.toLowerCase();
     if (lowerCode.startsWith('en')) return 'en';
     if (lowerCode.startsWith('ta')) return 'ta';
-    return code.split('-').first.toLowerCase();
+    
+    final base = code.split('-').first.toLowerCase();
+    // If the base code is longer than 3 characters, it's likely a full name
+    // (e.g. "hindi", "malayalam") that was unrecognized. Use auto-detect.
+    if (base.length > 3) return 'auto';
+    return base;
   }
 
   @override

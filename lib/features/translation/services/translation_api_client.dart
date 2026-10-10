@@ -31,7 +31,7 @@ class TranslationApiClient {
   ///
   /// Returns a map with `text` and `language` keys.
   /// Throws a user-friendly [String] on failure.
-  Future<Map<String, dynamic>> transcribe(Uint8List audioBytes, {String filename = 'audio.wav'}) async {
+  Future<Map<String, dynamic>> transcribe(Uint8List audioBytes, {String filename = 'audio.wav', String? language}) async {
     try {
       final uri = Uri.parse('$_baseUrl/api/translation/transcribe');
       final request = http.MultipartRequest('POST', uri)
@@ -40,6 +40,10 @@ class TranslationApiClient {
           audioBytes,
           filename: filename,
         ));
+
+      if (language != null && language.isNotEmpty && language != 'auto') {
+        request.fields['language'] = language;
+      }
 
       // Timeout covers both the upload AND the Whisper processing time.
       final streamedResponse = await request.send().timeout(_timeout);
