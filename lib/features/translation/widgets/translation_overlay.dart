@@ -160,7 +160,7 @@ class _TranslationOverlayState extends State<TranslationOverlay>
 
     debugPrint('[TranslationOverlay] Starting translation services');
 
-    // Mute remote audio if TTS is enabled, otherwise let original audio play
+    // Mute remote audio when TTS is enabled to prevent overlapping voices.
     widget.onMuteRemoteAudio(widget.isTtsEnabled);
 
     if (mounted) {
@@ -282,8 +282,6 @@ class _TranslationOverlayState extends State<TranslationOverlay>
     _statusSub = null;
     _speakingStateSub?.cancel();
     _speakingStateSub = null;
-
-    widget.onMuteRemoteAudio(false);
 
     final engineToStop = _translationEngine;
     _translationEngine = null;

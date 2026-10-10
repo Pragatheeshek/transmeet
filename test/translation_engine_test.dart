@@ -21,44 +21,25 @@ import 'package:transmeet/features/translation/services/translation_api_client.d
 void main() {
   // ── TranslationLanguage ─────────────────────────────────────────────────────
   group('TranslationLanguage', () {
-    test('supportedLanguages has at least 13 entries', () {
+    test('supportedLanguages has exactly 2 entries', () {
       expect(
         TranslationLanguage.supportedLanguages.length,
-        greaterThanOrEqualTo(13),
+        equals(2),
       );
     });
 
-    test('supportedLanguages includes Italian, Portuguese, Chinese', () {
+    test('supportedLanguages includes English and Tamil', () {
       final codes =
           TranslationLanguage.supportedLanguages.map((l) => l.code).toList();
-      expect(codes, contains('it'));
-      expect(codes, contains('pt'));
-      expect(codes, contains('zh'));
+      expect(codes, contains('en-US'));
+      expect(codes, contains('ta-IN'));
     });
 
     test('fromCode returns correct language for "ta"', () {
       final lang = TranslationLanguage.fromCode('ta');
       expect(lang, isNotNull);
       expect(lang!.name, 'Tamil');
-      expect(lang.code, 'ta');
-    });
-
-    test('fromCode returns correct language for "it" (Italian)', () {
-      final lang = TranslationLanguage.fromCode('it');
-      expect(lang, isNotNull);
-      expect(lang!.name, 'Italian');
-    });
-
-    test('fromCode returns correct language for "pt" (Portuguese)', () {
-      final lang = TranslationLanguage.fromCode('pt');
-      expect(lang, isNotNull);
-      expect(lang!.name, 'Portuguese');
-    });
-
-    test('fromCode returns correct language for "zh" (Chinese)', () {
-      final lang = TranslationLanguage.fromCode('zh');
-      expect(lang, isNotNull);
-      expect(lang!.name, 'Chinese');
+      expect(lang.code, 'ta-IN');
     });
 
     test('fromCode returns null for unknown code', () {
@@ -66,9 +47,9 @@ void main() {
     });
 
     test('fromName returns correct language (case-insensitive)', () {
-      final lang = TranslationLanguage.fromName('hindi');
+      final lang = TranslationLanguage.fromName('english');
       expect(lang, isNotNull);
-      expect(lang!.code, 'hi');
+      expect(lang!.code, 'en-US');
     });
 
     test('fromName returns null for unknown name', () {
@@ -76,19 +57,14 @@ void main() {
     });
 
     test('nameToCode converts name to code', () {
-      expect(TranslationLanguage.nameToCode('English'), 'en');
-      expect(TranslationLanguage.nameToCode('Tamil'), 'ta');
-      expect(TranslationLanguage.nameToCode('Hindi'), 'hi');
-      expect(TranslationLanguage.nameToCode('Japanese'), 'ja');
-      expect(TranslationLanguage.nameToCode('Italian'), 'it');
+      expect(TranslationLanguage.nameToCode('English'), 'en-US');
+      expect(TranslationLanguage.nameToCode('Tamil'), 'ta-IN');
       expect(TranslationLanguage.nameToCode('Unknown'), isNull);
     });
 
     test('codeToName converts code to name', () {
-      expect(TranslationLanguage.codeToName('fr'), 'French');
-      expect(TranslationLanguage.codeToName('de'), 'German');
-      expect(TranslationLanguage.codeToName('pt'), 'Portuguese');
-      expect(TranslationLanguage.codeToName('zh'), 'Chinese');
+      expect(TranslationLanguage.codeToName('en-US'), 'English');
+      expect(TranslationLanguage.codeToName('ta-IN'), 'Tamil');
       expect(TranslationLanguage.codeToName('xx'), isNull);
     });
 
@@ -107,9 +83,9 @@ void main() {
     });
 
     test('equality is based on code', () {
-      final a = TranslationLanguage(code: 'en', name: 'English');
-      final b = TranslationLanguage(code: 'en', name: 'English');
-      final c = TranslationLanguage(code: 'ta', name: 'Tamil');
+      final a = TranslationLanguage(code: 'en-US', name: 'English');
+      final b = TranslationLanguage(code: 'en-US', name: 'English');
+      final c = TranslationLanguage(code: 'ta-IN', name: 'Tamil');
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
     });
@@ -119,6 +95,7 @@ void main() {
   group('TranslationResult', () {
     test('factory constructor creates result with timestamp', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'Test Speaker',
         originalText: 'Hello',
         translatedText: 'வணக்கம்',
         sourceLanguage: 'en',
@@ -133,6 +110,7 @@ void main() {
 
     test('English → Tamil result', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'Test Speaker',
         originalText: 'Hello, how are you?',
         translatedText: 'வணக்கம், எப்படி இருக்கிறீர்கள்?',
         sourceLanguage: 'en',
@@ -145,6 +123,7 @@ void main() {
 
     test('Tamil → English result', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'Test Speaker',
         originalText: 'வணக்கம்',
         translatedText: 'Hello',
         sourceLanguage: 'ta',
@@ -157,6 +136,7 @@ void main() {
 
     test('English → Hindi result', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'Test Speaker',
         originalText: 'Hello',
         translatedText: 'नमस्ते',
         sourceLanguage: 'en',
@@ -168,6 +148,7 @@ void main() {
 
     test('toMap produces correct map', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'Test Speaker',
         originalText: 'Hello',
         translatedText: 'Bonjour',
         sourceLanguage: 'en',
@@ -183,6 +164,7 @@ void main() {
 
     test('toString includes language arrow', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'Test Speaker',
         originalText: 'Hello',
         translatedText: 'Hola',
         sourceLanguage: 'en',

@@ -95,7 +95,11 @@ class WebRTCService {
   Future<void> initLocalStream() async {
     if (_disposed) return;
     localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
+      'audio': {
+        'echoCancellation': true,
+        'noiseSuppression': true,
+        'autoGainControl': true,
+      },
       'video': {'facingMode': 'user'}
     });
   }

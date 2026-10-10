@@ -13,7 +13,7 @@ class TranslationLanguage {
 
   /// All languages supported by the TransMeet translation system.
   static const List<TranslationLanguage> supportedLanguages = [
-    TranslationLanguage(code: 'en-GB', name: 'English (United Kingdom)'),
+    TranslationLanguage(code: 'en-US', name: 'English'),
     TranslationLanguage(code: 'ta-IN', name: 'Tamil'),
   ];
 
@@ -24,7 +24,7 @@ class TranslationLanguage {
     for (final lang in supportedLanguages) {
       if (lang.code.toLowerCase() == lowerCode) return lang;
     }
-    // Fallback if someone asks for 'en' or 'ta'
+    // Fallback if someone asks for 'en', 'ta', or 'ml'
     if (lowerCode == 'en') return supportedLanguages[0];
     if (lowerCode == 'ta') return supportedLanguages[1];
     return null;
@@ -37,7 +37,7 @@ class TranslationLanguage {
     for (final lang in supportedLanguages) {
       if (lang.name.toLowerCase() == lowerName) return lang;
     }
-    // Handle Whisper API outputs which are just 'english' or 'tamil'
+    // Handle Whisper API outputs which are just 'english', 'tamil', or 'malayalam'
     if (lowerName == 'english') return supportedLanguages[0];
     if (lowerName == 'tamil') return supportedLanguages[1];
     return null;

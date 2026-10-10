@@ -73,7 +73,6 @@ class AudioCaptureService {
       _transcriptionController.stream;
 
   String _meetingId = '';
-  String _lastBroadcastText = '';
 
   /// Duration of each recording segment.
   static const Duration _segmentDuration = Duration(seconds: 5);
@@ -90,7 +89,6 @@ class AudioCaptureService {
     _meetingId = meetingId;
     _preferredLanguage = preferredLanguage;
     _isRunning = true;
-    _lastBroadcastText = '';
 
     debugPrint('[AudioCapture] Starting Whisper-based speech capture');
 
@@ -163,9 +161,24 @@ class AudioCaptureService {
             sampleRate: 16000,
             numChannels: 1,
             bitRate: 128000,
+            echoCancel: true,
+            autoGain: true,
+            noiseSuppress: true,
           ),
           path: segmentPath,
         );
+
+        double maxAmplitude = -100.0;
+        StreamSubscription? ampSub;
+        try {
+          ampSub = _recorder.onAmplitudeChanged(const Duration(milliseconds: 100)).listen((amp) {
+            if (amp.current > maxAmplitude) {
+              maxAmplitude = amp.current;
+            }
+          });
+        } catch (e) {
+          debugPrint('[AudioCapture] Amplitude check error: $e');
+        }
 
         // Wait for the segment duration in 100ms chunks to allow mid-segment pause/resume
         final chunks = _segmentDuration.inMilliseconds ~/ 100;
@@ -176,8 +189,18 @@ class AudioCaptureService {
 
         // Stop recording — returns the file path (or null on error)
         final resultPath = await _recorder.stop();
+        await ampSub?.cancel();
 
         if (!_isRunning || _isDisposed) break;
+
+        if (maxAmplitude < -35.0) {
+          debugPrint('[AudioCapture] Silence detected (max $maxAmplitude dB). Skipping Whisper.');
+          try {
+            final f = File(resultPath ?? segmentPath);
+            if (await f.exists()) await f.delete();
+          } catch (_) {}
+          continue;
+        }
 
         // ── Read the recorded file ────────────────────────────────────────
         final file = File(resultPath ?? segmentPath);
@@ -221,26 +244,32 @@ class AudioCaptureService {
     if (!_isRunning || _isDisposed) return;
 
     try {
+      final langToUse = (_preferredLanguage != null && _preferredLanguage!.isNotEmpty) ? _preferredLanguage! : 'auto';
+      
       final result = await _apiClient.transcribe(
         audioBytes,
         filename: 'segment.m4a',
-        language: _preferredLanguage,
+        language: langToUse,
       );
 
       final text = (result['text'] as String? ?? '').trim();
-      final detectedLanguage = result['language'] as String? ?? 'auto';
+      final detectedLanguage = result['language'] as String? ?? langToUse;
 
       if (text.isEmpty) {
         debugPrint('[AudioCapture] Whisper returned empty text, skipping');
         return;
       }
 
-      // Skip if this is the same text we just broadcast (duplicate)
-      if (text == _lastBroadcastText) {
-        debugPrint('[AudioCapture] Duplicate text, skipping');
+      // Filter out common Whisper hallucinations for silence
+      final lowerText = text.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+      if (lowerText == 'thankyou' ||
+          lowerText == 'thanksforwatching' ||
+          lowerText == 'pleasesubscribe' ||
+          lowerText == 'amaraorg' ||
+          lowerText == 'you') {
+        debugPrint('[AudioCapture] Filtering probable Whisper hallucination: "$text"');
         return;
       }
-      _lastBroadcastText = text;
 
       debugPrint('[AudioCapture] Whisper result: "$text" (lang: $detectedLanguage)');
       await _broadcastToFirestore(text, detectedLanguage);

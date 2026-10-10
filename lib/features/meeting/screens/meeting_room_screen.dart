@@ -391,9 +391,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen>
       meetingId: widget.meeting.docId,
       isMicOn: !newMuted,
     );
-    if (_isTranslationEnabled) {
-      _captureService?.pauseCapture(newMuted);
-    }
+    _captureService?.pauseCapture(newMuted);
   }
 
   void _toggleCamera() {

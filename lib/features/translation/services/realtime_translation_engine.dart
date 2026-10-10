@@ -75,6 +75,15 @@ class RealtimeTranslationEngine {
         debugPrint('[TranslationEngine] Failed to save preferred language: $e');
       }
     }
+
+    // Stop current TTS playback and clear queue to avoid playing stale audio
+    try {
+      await _audioPlayer.stop();
+    } catch (e) {
+      debugPrint('[TranslationEngine] Ignored audio player stop error: $e');
+    }
+    _speakQueue.clear();
+    _setSpeaking(false);
   }
 
   /// Queue of base64 audio segments to speak in order.
@@ -82,9 +91,6 @@ class RealtimeTranslationEngine {
 
   /// Track processed document IDs to avoid duplicates.
   final Set<String> _processedDocIds = {};
-
-  /// Track last translated text to avoid duplicate translations.
-  String _lastTranslatedText = '';
 
   /// Monotonically increasing sequence number to prevent stale response
   /// overwrites. Each translation request gets the next sequence number.
@@ -135,12 +141,13 @@ class RealtimeTranslationEngine {
         '[TranslationEngine] Starting — target: $_targetLanguageName ($_targetLanguageCode)');
     _isRunning = true;
     _processedDocIds.clear();
-    _lastTranslatedText = '';
     _requestSequence = 0;
     _lastEmittedSequence = 0;
     _emitStatus('Listening for speech...');
 
     final myUid = FirebaseAuth.instance.currentUser?.uid;
+
+    bool isFirstSnapshot = true;
 
     // Listen to transcriptions in real-time
     _transcriptionSub = _firestore
@@ -150,6 +157,14 @@ class RealtimeTranslationEngine {
         .orderBy('timestamp', descending: false)
         .snapshots()
         .listen((snapshot) {
+      if (isFirstSnapshot) {
+        isFirstSnapshot = false;
+        for (final change in snapshot.docChanges) {
+          _processedDocIds.add(change.doc.id);
+        }
+        return;
+      }
+
       for (final change in snapshot.docChanges) {
         if (change.type != DocumentChangeType.added) continue;
 
@@ -214,8 +229,11 @@ class RealtimeTranslationEngine {
     _transcriptionSub = null;
     _speakQueue.clear();
     _processedDocIds.clear();
-    _lastTranslatedText = '';
-    await _audioPlayer.stop();
+    try {
+      await _audioPlayer.stop();
+    } catch (e) {
+      debugPrint('[TranslationEngine] Ignored audio player stop error: $e');
+    }
     _setSpeaking(false);
     _emitStatus('Translation paused');
   }
@@ -232,12 +250,6 @@ class RealtimeTranslationEngine {
 
     // Guard: empty/whitespace
     if (trimmedText.isEmpty) return;
-
-    // Guard: exact duplicate of last translation
-    if (trimmedText == _lastTranslatedText) {
-      debugPrint('[TranslationEngine] Skipping duplicate: "$trimmedText"');
-      return;
-    }
 
     // Assign a sequence number for this request
     _requestSequence++;
@@ -284,7 +296,6 @@ class RealtimeTranslationEngine {
         return;
       }
       _lastEmittedSequence = mySequence;
-      _lastTranslatedText = trimmedText;
 
       // Emit caption for UI — immediately, don't wait for TTS
       if (!_isDisposed) {
@@ -297,7 +308,7 @@ class RealtimeTranslationEngine {
         ));
       }
 
-      // Call backend synthesize API
+      // Call backend synthesize API for all received speech when TTS is enabled
       if (enableTts) {
         _emitStatus('Synthesizing...');
         final audioContent = await _synthesizeViaBackend(translatedText, _targetLanguageCode);
@@ -439,7 +450,7 @@ class RealtimeTranslationEngine {
   /// Synthesize text to speech via backend
   Future<String> _synthesizeViaBackend(String text, String to) async {
     try {
-      final safeTo = TranslationLanguage.nameToCode(to) ?? to;
+      final safeTo = TranslationLanguage.fromCode(to)?.code ?? TranslationLanguage.nameToCode(to) ?? to;
       final url = Uri.parse('$_backendBaseUrl/api/translation/synthesize');
       final response = await _httpClient
           .post(
@@ -480,18 +491,7 @@ class RealtimeTranslationEngine {
 
         final duration = await _audioPlayer.setFilePath(tempFile.path);
         
-        _audioPlayer.play();
-        
-        if (duration != null) {
-          // Wait exactly the length of the audio plus a small buffer
-          await Future.delayed(duration + const Duration(milliseconds: 100));
-        } else {
-          try {
-            await _audioPlayer.processingStateStream.firstWhere(
-                (state) => state == ProcessingState.completed || state == ProcessingState.idle,
-            ).timeout(const Duration(seconds: 10));
-          } catch (_) {}
-        }
+        await _audioPlayer.play();
             
         // Ensure player is stopped before loading the next file
         await _audioPlayer.stop();
@@ -547,7 +547,6 @@ class RealtimeTranslationEngine {
     _transcriptionSub = null;
     _speakQueue.clear();
     _processedDocIds.clear();
-    _lastTranslatedText = '';
     await _audioPlayer.dispose();
     _httpClient.close();
     await _resultController.close();

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:transmeet/core/constants/app_constants.dart';
+import 'package:transmeet/features/translation/models/translation_language.dart';
 
 /// HTTP client for communicating with the TransMeet translation backend.
 ///
@@ -42,7 +43,7 @@ class TranslationApiClient {
         ));
 
       if (language != null && language.isNotEmpty && language != 'auto') {
-        request.fields['language'] = language;
+        request.fields['language'] = TranslationLanguage.baseCode(language);
       }
 
       // Timeout covers both the upload AND the Whisper processing time.
@@ -85,8 +86,8 @@ class TranslationApiClient {
             headers: {'Content-Type': 'application/json'},
             body: json.encode({
               'text': text,
-              'sourceLanguage': sourceLanguage,
-              'targetLanguage': targetLanguage,
+              'sourceLanguage': sourceLanguage == 'auto' ? 'auto' : TranslationLanguage.baseCode(sourceLanguage),
+              'targetLanguage': TranslationLanguage.baseCode(targetLanguage),
             }),
           )
           .timeout(_timeout);
@@ -118,6 +119,7 @@ class TranslationApiClient {
     required String languageCode,
   }) async {
     try {
+      final safeCode = TranslationLanguage.fromCode(languageCode)?.code ?? TranslationLanguage.nameToCode(languageCode) ?? languageCode;
       final uri = Uri.parse('$_baseUrl/api/translation/synthesize');
       final response = await _client
           .post(
@@ -125,7 +127,7 @@ class TranslationApiClient {
             headers: {'Content-Type': 'application/json'},
             body: json.encode({
               'text': text,
-              'languageCode': languageCode,
+              'languageCode': safeCode,
             }),
           )
           .timeout(_timeout);

@@ -84,8 +84,8 @@ void main() {
       expect(AppConstants.supportedLanguages.contains('English'), isTrue);
     });
 
-    test('supportedLanguages has at least 10 languages', () {
-      expect(AppConstants.supportedLanguages.length, greaterThanOrEqualTo(10));
+    test('supportedLanguages has exactly 2 languages', () {
+      expect(AppConstants.supportedLanguages.length, equals(2));
     });
 
     test('selectLanguage label is non-empty', () {
@@ -382,10 +382,10 @@ void main() {
 
   // ── Module 5 — Translation Language ─────────────────────────────────────
   group('Module 5 — TranslationLanguage', () {
-    test('supportedLanguages has at least 10 entries', () {
+    test('supportedLanguages has exactly 2 entries', () {
       expect(
         TranslationLanguage.supportedLanguages.length,
-        greaterThanOrEqualTo(10),
+        equals(2),
       );
     });
 
@@ -393,7 +393,7 @@ void main() {
       final lang = TranslationLanguage.fromCode('ta');
       expect(lang, isNotNull);
       expect(lang!.name, 'Tamil');
-      expect(lang.code, 'ta');
+      expect(lang.code, 'ta-IN');
     });
 
     test('fromCode returns null for unknown code', () {
@@ -401,9 +401,9 @@ void main() {
     });
 
     test('fromName returns correct language (case-insensitive)', () {
-      final lang = TranslationLanguage.fromName('hindi');
+      final lang = TranslationLanguage.fromName('tamil');
       expect(lang, isNotNull);
-      expect(lang!.code, 'hi');
+      expect(lang!.code, 'ta-IN');
     });
 
     test('fromName returns null for unknown name', () {
@@ -411,14 +411,14 @@ void main() {
     });
 
     test('nameToCode converts name to code', () {
-      expect(TranslationLanguage.nameToCode('English'), 'en');
-      expect(TranslationLanguage.nameToCode('Japanese'), 'ja');
+      expect(TranslationLanguage.nameToCode('English'), 'en-US');
+      expect(TranslationLanguage.nameToCode('Tamil'), 'ta-IN');
       expect(TranslationLanguage.nameToCode('Unknown'), isNull);
     });
 
     test('codeToName converts code to name', () {
-      expect(TranslationLanguage.codeToName('fr'), 'French');
-      expect(TranslationLanguage.codeToName('de'), 'German');
+      expect(TranslationLanguage.codeToName('en-US'), 'English');
+      expect(TranslationLanguage.codeToName('ta-IN'), 'Tamil');
       expect(TranslationLanguage.codeToName('xx'), isNull);
     });
 
@@ -430,9 +430,9 @@ void main() {
     });
 
     test('equality is based on code', () {
-      final a = TranslationLanguage(code: 'en', name: 'English');
-      final b = TranslationLanguage(code: 'en', name: 'English');
-      final c = TranslationLanguage(code: 'ta', name: 'Tamil');
+      final a = TranslationLanguage(code: 'en-US', name: 'English');
+      final b = TranslationLanguage(code: 'en-US', name: 'English');
+      final c = TranslationLanguage(code: 'ta-IN', name: 'Tamil');
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
     });
@@ -442,6 +442,7 @@ void main() {
   group('Module 5 — TranslationResult', () {
     test('factory constructor creates result with timestamp', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'TestSpeaker',
         originalText: 'Hello',
         translatedText: 'வணக்கம்',
         sourceLanguage: 'en',
@@ -456,6 +457,7 @@ void main() {
 
     test('toMap produces correct map', () {
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'TestSpeaker',
         originalText: 'Hello',
         translatedText: 'Bonjour',
         sourceLanguage: 'en',

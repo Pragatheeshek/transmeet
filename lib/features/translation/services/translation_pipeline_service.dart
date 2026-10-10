@@ -77,6 +77,7 @@ class TranslationPipelineService {
       // Skip translation if source == target
       if (detectedLanguage == targetLanguageCode) {
         final result = TranslationResult.fromTranscriptionAndTranslation(
+          speakerName: 'Local',
           originalText: text,
           translatedText: text,
           sourceLanguage: detectedLanguage,
@@ -103,6 +104,7 @@ class TranslationPipelineService {
       debugPrint('[Pipeline] Translation: ${t5.difference(t4).inMilliseconds}ms');
 
       final result = TranslationResult.fromTranscriptionAndTranslation(
+        speakerName: 'Local',
         originalText: text,
         translatedText: translatedText,
         sourceLanguage: detectedLanguage,
