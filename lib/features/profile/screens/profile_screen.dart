@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:transmeet/core/constants/app_constants.dart';
 import 'package:transmeet/core/services/auth_service.dart';
 import 'package:transmeet/features/auth/login_screen.dart';
+import 'package:transmeet/features/profile/screens/edit_profile_screen.dart';
+import 'package:transmeet/features/profile/screens/update_password_screen.dart';
 
 /// Profile screen for the authenticated user.
 ///
@@ -33,6 +35,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
       default:
         return id;
     }
+  }
+
+  bool _isGoogleUser(User user) {
+    return user.providerData.any((p) => p.providerId == 'google.com');
+  }
+
+  bool _canUpdatePassword(User user) {
+    // If user signed in with Google, do not allow password updates.
+    if (_isGoogleUser(user)) return false;
+    return user.providerData.any((p) => p.providerId == 'password') ||
+        (user.providerData.isEmpty && (user.email?.isNotEmpty ?? false));
   }
 
   Future<void> _confirmSignOut() async {
@@ -98,6 +111,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final email = user.email ?? '';
     final provider = _providerLabel(user);
     final photoUrl = user.photoURL;
+    final canUpdatePassword = _canUpdatePassword(user);
 
     return Scaffold(
       appBar: AppBar(
@@ -118,7 +132,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 color: theme.colorScheme.surfaceContainerHighest,
                 child: Column(
                   children: [
-                    _buildAvatar(context, photoUrl, displayName, email),
+                    GestureDetector(
+                      onTap: () async {
+                        final updated = await Navigator.of(context).push<bool>(
+                          MaterialPageRoute(
+                            builder: (_) => const EditProfileScreen(),
+                          ),
+                        );
+                        if (updated == true && mounted) {
+                          setState(() {});
+                        }
+                      },
+                      child: Stack(
+                        children: [
+                          _buildAvatar(context, photoUrl, displayName, email),
+                          Positioned(
+                            bottom: 0,
+                            right: 0,
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primary,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color:
+                                      theme.colorScheme.surfaceContainerHighest,
+                                  width: 2.5,
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.edit_rounded,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 16),
                     if (displayName.isNotEmpty)
                       Text(
@@ -172,33 +223,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       icon: Icons.edit_outlined,
                       label: 'Edit Profile',
                       subtitle: 'Update your display name and photo',
-                      onTap: () {
-                        ScaffoldMessenger.of(context)
-                          ..clearSnackBars()
-                          ..showSnackBar(
-                            const SnackBar(
-                              content:
-                                  Text(AppConstants.featureComingSoon),
-                            ),
-                          );
+                      onTap: () async {
+                        final updated = await Navigator.of(context).push<bool>(
+                          MaterialPageRoute(
+                            builder: (_) => const EditProfileScreen(),
+                          ),
+                        );
+                        if (updated == true && mounted) {
+                          setState(() {});
+                        }
                       },
                     ),
+                    if (canUpdatePassword) ...[
+                      const SizedBox(height: 8),
+                      _ActionTile(
+                        icon: Icons.lock_outline_rounded,
+                        label: 'Update Password',
+                        subtitle: 'Update your account password',
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const UpdatePasswordScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 8),
-                    _ActionTile(
-                      icon: Icons.lock_outline_rounded,
-                      label: 'Change Password',
-                      subtitle: 'Update your account password',
-                      onTap: () {
-                        ScaffoldMessenger.of(context)
-                          ..clearSnackBars()
-                          ..showSnackBar(
-                            const SnackBar(
-                              content:
-                                  Text(AppConstants.featureComingSoon),
-                            ),
-                          );
-                      },
-                    ),
                     const Divider(),
                     const SizedBox(height: 8),
 

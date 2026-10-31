@@ -53,9 +53,17 @@ class TranslationLanguage {
 
   /// Returns the ISO 639-1 base language code (e.g. 'en' for 'en-GB').
   /// This is required for Google Translate API, which often rejects regional codes.
+  ///
+  /// Also handles Whisper's full-word language names ('english', 'tamil')
+  /// which would otherwise be treated as unknown codes.
   static String baseCode(String code) {
     if (code.toLowerCase() == 'auto') return 'auto';
-    final lowerCode = code.toLowerCase();
+    final lowerCode = code.toLowerCase().trim();
+
+    // Handle Whisper full-word language names first
+    if (lowerCode == 'english') return 'en';
+    if (lowerCode == 'tamil') return 'ta';
+
     if (lowerCode.startsWith('en')) return 'en';
     if (lowerCode.startsWith('ta')) return 'ta';
     

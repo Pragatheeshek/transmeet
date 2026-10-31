@@ -296,11 +296,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.person_outline_rounded,
               title: 'Profile',
               subtitle: 'Manage your account details',
-              onTap: () {
-                Navigator.of(context).push(
+              onTap: () async {
+                await Navigator.of(context).push(
                   MaterialPageRoute(
                       builder: (_) => const ProfileScreen()),
                 );
+                if (mounted) setState(() {});
               },
             ),
             _SettingsTile(

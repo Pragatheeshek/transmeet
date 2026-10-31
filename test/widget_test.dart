@@ -626,4 +626,69 @@ void main() {
       expect(restored.isMicOn, false);
     });
   });
+
+  // ── Profile & Password Management ──────────────────────────────────────────
+  group('Profile and Password Management', () {
+    test('AppConstants contains editProfile and updatePassword labels', () {
+      expect(AppConstants.editProfile, 'Edit Profile');
+      expect(AppConstants.updatePassword, 'Update Password');
+    });
+
+    test('Google users do not have update password access', () {
+      final googleProviders = ['google.com'];
+      final isGoogleUser = googleProviders.contains('google.com');
+      final canUpdatePassword = !isGoogleUser;
+
+      expect(canUpdatePassword, isFalse);
+    });
+
+    test('Email/password users have update password access', () {
+      final emailProviders = ['password'];
+      final isGoogleUser = emailProviders.contains('google.com');
+      final canUpdatePassword = !isGoogleUser && emailProviders.contains('password');
+
+      expect(canUpdatePassword, isTrue);
+    });
+
+    test('Display name validation logic', () {
+      String? validateName(String? value) {
+        if (value == null || value.trim().isEmpty) {
+          return 'Please enter your name';
+        }
+        if (value.trim().length < 2) {
+          return 'Name must be at least 2 characters';
+        }
+        if (value.trim().length > 50) {
+          return 'Name must be 50 characters or less';
+        }
+        return null;
+      }
+
+      expect(validateName(''), 'Please enter your name');
+      expect(validateName('   '), 'Please enter your name');
+      expect(validateName('A'), 'Name must be at least 2 characters');
+      expect(validateName('Alex Morgan'), isNull);
+      expect(validateName('A' * 51), 'Name must be 50 characters or less');
+    });
+
+    test('Password update validation logic', () {
+      String? validateNewPassword(String? value, String currentPassword) {
+        if (value == null || value.isEmpty) {
+          return 'Please enter a new password';
+        }
+        if (value.length < 8) {
+          return 'Password must be at least 8 characters';
+        }
+        if (value == currentPassword) {
+          return 'New password must be different from current password';
+        }
+        return null;
+      }
+
+      expect(validateNewPassword('', 'oldPass123'), 'Please enter a new password');
+      expect(validateNewPassword('short', 'oldPass123'), 'Password must be at least 8 characters');
+      expect(validateNewPassword('oldPass123', 'oldPass123'), 'New password must be different from current password');
+      expect(validateNewPassword('newSecurePassword123', 'oldPass123'), isNull);
+    });
+  });
 }

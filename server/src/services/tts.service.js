@@ -2,9 +2,17 @@ const axios = require('axios');
 
 const isMockMode = () => process.env.TRANSLATION_MOCK_MODE === 'true';
 
-// Language code to Google TTS voice mapping
+// Language code to Google TTS voice mapping.
+// Multiple keys map to the same voice so that any code variant the client
+// sends (base code, regional code, or Whisper full-word name) will resolve.
 const VOICE_MAP = {
+  // English variants
+  'en':    { languageCode: 'en-US', name: 'en-US-Standard-A' },
+  'en-US': { languageCode: 'en-US', name: 'en-US-Standard-A' },
   'en-GB': { languageCode: 'en-GB', name: 'en-GB-Standard-A' },
+  'en-IN': { languageCode: 'en-IN', name: 'en-IN-Standard-A' },
+  // Tamil variants
+  'ta':    { languageCode: 'ta-IN', name: 'ta-IN-Standard-A' },
   'ta-IN': { languageCode: 'ta-IN', name: 'ta-IN-Standard-A' },
 };
 
@@ -62,8 +70,9 @@ async function synthesize(text, languageCode) {
   }
 
   const voice = VOICE_MAP[languageCode];
+  console.log(`[TTS] Voice lookup: code="${languageCode}" → ${voice ? `${voice.name} (${voice.languageCode})` : 'NOT FOUND'} [available: ${Object.keys(VOICE_MAP).join(', ')}]`);
   if (!voice) {
-    throw new Error(`Unsupported language for TTS: ${languageCode}`);
+    throw new Error(`Unsupported language for TTS: ${languageCode}. Available: ${Object.keys(VOICE_MAP).join(', ')}`);
   }
 
   try {

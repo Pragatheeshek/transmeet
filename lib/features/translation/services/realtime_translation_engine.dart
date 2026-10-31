@@ -184,7 +184,10 @@ class RealtimeTranslationEngine {
 
         if (text.trim().isEmpty) continue;
 
-        debugPrint('[TranslationEngine] Received from $speakerName: "$text" ($detectedLanguage)');
+        debugPrint('[MEETING] Received transcription from $speakerName');
+        debugPrint('[MEETING] Source language: $detectedLanguage');
+        debugPrint('[MEETING] Target language: $_targetLanguageCode');
+        debugPrint('[STT] Transcript: "${text.length > 80 ? text.substring(0, 80) : text}"');
         _processTranscription(
           text: text,
           sourceLanguage: detectedLanguage,
@@ -260,10 +263,14 @@ class RealtimeTranslationEngine {
     try {
       String translatedText;
 
-      if (TranslationLanguage.baseCode(sourceLanguage) == 
-          TranslationLanguage.baseCode(_targetLanguageCode)) {
+      final sourceBase = TranslationLanguage.baseCode(sourceLanguage);
+      final targetBase = TranslationLanguage.baseCode(_targetLanguageCode);
+      debugPrint('[TRANSLATION] Source: $sourceLanguage (base: $sourceBase)');
+      debugPrint('[TRANSLATION] Target: $_targetLanguageCode (base: $targetBase)');
+
+      if (sourceBase == targetBase) {
         translatedText = trimmedText;
-        debugPrint('[TranslationEngine] Source == target, no translation needed');
+        debugPrint('[TRANSLATION] Source == target, no translation needed');
       } else {
         _emitStatus('Translating...');
 
@@ -273,6 +280,7 @@ class RealtimeTranslationEngine {
         final effectiveSource =
             sourceLanguage == 'auto' ? 'auto' : sourceLanguage;
         final t4 = DateTime.now(); // T4: Translation request sent
+        debugPrint('[TRANSLATION] Requesting: $effectiveSource → $_targetLanguageCode');
         translatedText = await _translateViaBackend(
           trimmedText,
           effectiveSource,
@@ -281,11 +289,8 @@ class RealtimeTranslationEngine {
         final t5 = DateTime.now(); // T5: Translation received
 
         final translationLatency = t5.difference(t4).inMilliseconds;
-        debugPrint(
-            '[TranslationEngine] Translation: ${translationLatency}ms'
-            ' ($effectiveSource → $_targetLanguageCode)');
-        debugPrint(
-            '[TranslationEngine] → $_targetLanguageCode: "$translatedText"');
+        debugPrint('[TRANSLATION] Completed in ${translationLatency}ms');
+        debugPrint('[TRANSLATION] Result: "${translatedText.length > 80 ? translatedText.substring(0, 80) : translatedText}"');
       }
 
       // Check if this response is stale (a newer request already completed)
@@ -311,21 +316,22 @@ class RealtimeTranslationEngine {
       // Call backend synthesize API for all received speech when TTS is enabled
       if (enableTts) {
         _emitStatus('Synthesizing...');
+        debugPrint('[TTS] Requesting synthesis for lang=$_targetLanguageCode text="${translatedText.length > 60 ? translatedText.substring(0, 60) : translatedText}"');
         final audioContent = await _synthesizeViaBackend(translatedText, _targetLanguageCode);
+
+        if (audioContent.isEmpty) {
+          debugPrint('[TTS] WARNING: Synthesis returned empty audio for lang=$_targetLanguageCode');
+        }
 
         // Queue for TTS playback
         if (_isRunning && !_isDisposed && audioContent.isNotEmpty) {
-          final t6 = DateTime.now(); // T6: TTS request sent
           _speakQueue.add(audioContent);
+          debugPrint('[DELIVERY] Audio queued for playback (${audioContent.length} base64 chars)');
           _processQueue();
 
-          final t7 = DateTime.now(); // T7: TTS queued
-          final ttsStartup = t7.difference(t6).inMilliseconds;
-          final totalLatency = t7.difference(t1).inMilliseconds;
+          final totalLatency = DateTime.now().difference(t1).inMilliseconds;
 
-          debugPrint('[Translation Latency]');
-          debugPrint('  Total end-to-end: ${totalLatency}ms');
-          debugPrint('  TTS startup (network): ${ttsStartup}ms');
+          debugPrint('[PLAYBACK] Total end-to-end latency: ${totalLatency}ms');
         }
       }
 
@@ -451,6 +457,7 @@ class RealtimeTranslationEngine {
   Future<String> _synthesizeViaBackend(String text, String to) async {
     try {
       final safeTo = TranslationLanguage.fromCode(to)?.code ?? TranslationLanguage.nameToCode(to) ?? to;
+      debugPrint('[TTS] Language code resolution: input="$to" → safeTo="$safeTo"');
       final url = Uri.parse('$_backendBaseUrl/api/translation/synthesize');
       final response = await _httpClient
           .post(
@@ -465,10 +472,13 @@ class RealtimeTranslationEngine {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as Map<String, dynamic>;
-        return data['audioContent'] as String? ?? '';
+        final audioContent = data['audioContent'] as String? ?? '';
+        debugPrint('[TTS] Synthesis succeeded: ${audioContent.length} base64 chars');
+        return audioContent;
       }
+      debugPrint('[TTS] Synthesis failed: HTTP ${response.statusCode} — ${response.body}');
     } catch (e) {
-      debugPrint('[TranslationEngine] Synthesize error: $e');
+      debugPrint('[TTS] Synthesize error: $e');
     }
     return '';
   }

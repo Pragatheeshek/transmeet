@@ -179,6 +179,100 @@ class AuthService {
   }
 
   // ---------------------------------------------------------------------------
+  // Profile & Password Management
+  // ---------------------------------------------------------------------------
+
+  /// Updates the current user's profile information (display name and photo URL).
+  ///
+  /// Updates both Firebase Auth and the Firestore `users` collection.
+  Future<void> updateProfile({
+    required String displayName,
+    String? photoURL,
+  }) async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) {
+      throw 'No user is currently signed in.';
+    }
+
+    try {
+      final trimmedName = displayName.trim();
+      final trimmedPhoto = photoURL?.trim();
+
+      await user.updateDisplayName(trimmedName);
+      await user.updatePhotoURL(
+        trimmedPhoto != null && trimmedPhoto.isNotEmpty ? trimmedPhoto : null,
+      );
+      await user.reload();
+
+      await _firestore.collection('users').doc(user.uid).set({
+        'displayName': trimmedName,
+        'photoURL': trimmedPhoto ?? '',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } on FirebaseAuthException catch (e) {
+      throw _mapFirebaseAuthError(e.code);
+    } catch (e) {
+      if (e is String) rethrow;
+      throw 'Failed to update profile. Please try again.';
+    }
+  }
+
+  /// Updates the authenticated user's password.
+  ///
+  /// Reauthenticates first with [currentPassword] to satisfy Firebase's
+  /// security requirement for recent authentication.
+  Future<void> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null || user.email == null) {
+      throw 'No user is currently signed in.';
+    }
+
+    try {
+      final credential = EmailAuthProvider.credential(
+        email: user.email!,
+        password: currentPassword,
+      );
+      await user.reauthenticateWithCredential(credential);
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      switch (e.code) {
+        case 'wrong-password':
+        case 'invalid-credential':
+          throw 'Current password is incorrect.';
+        case 'weak-password':
+          throw 'Password is too weak. Please use at least 8 characters.';
+        case 'requires-recent-login':
+          throw 'Please sign out and sign in again before changing your password.';
+        default:
+          throw _mapFirebaseAuthError(e.code);
+      }
+    } catch (e) {
+      if (e is String) rethrow;
+      throw 'Failed to update password. Please try again.';
+    }
+  }
+
+  /// Sends a password reset email to [email] or current user's email.
+  Future<void> sendPasswordResetEmail([String? email]) async {
+    final targetEmail = email ?? _firebaseAuth.currentUser?.email;
+    if (targetEmail == null || targetEmail.trim().isEmpty) {
+      throw 'No email address available.';
+    }
+
+    try {
+      await _firebaseAuth.sendPasswordResetEmail(email: targetEmail.trim());
+    } on FirebaseAuthException catch (e) {
+      throw _mapFirebaseAuthError(e.code);
+    } catch (e) {
+      if (e is String) rethrow;
+      throw 'Failed to send password reset email. Please try again.';
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Sign Out
   // ---------------------------------------------------------------------------
 
@@ -224,6 +318,8 @@ class AuthService {
         return 'Network error. Please check your internet connection.';
       case 'too-many-requests':
         return 'Too many attempts. Please try again later.';
+      case 'requires-recent-login':
+        return 'Please sign out and sign in again before performing this sensitive action.';
       default:
         return 'Authentication failed. Please try again.';
     }

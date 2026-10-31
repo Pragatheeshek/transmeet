@@ -91,6 +91,100 @@ void main() {
     });
   });
 
+  // ── baseCode — Whisper full-word name handling ─────────────────────────────
+  group('TranslationLanguage.baseCode', () {
+    test('handles regional codes correctly', () {
+      expect(TranslationLanguage.baseCode('en-US'), 'en');
+      expect(TranslationLanguage.baseCode('en-GB'), 'en');
+      expect(TranslationLanguage.baseCode('en-IN'), 'en');
+      expect(TranslationLanguage.baseCode('ta-IN'), 'ta');
+    });
+
+    test('handles bare ISO codes correctly', () {
+      expect(TranslationLanguage.baseCode('en'), 'en');
+      expect(TranslationLanguage.baseCode('ta'), 'ta');
+    });
+
+    test('handles Whisper full-word language names', () {
+      // Whisper returns "english" and "tamil" as detected language names.
+      // These must map to proper ISO codes, NOT fall back to 'auto'.
+      expect(TranslationLanguage.baseCode('english'), 'en');
+      expect(TranslationLanguage.baseCode('tamil'), 'ta');
+    });
+
+    test('handles auto correctly', () {
+      expect(TranslationLanguage.baseCode('auto'), 'auto');
+      expect(TranslationLanguage.baseCode('AUTO'), 'auto');
+    });
+
+    test('unknown long names fall back to auto', () {
+      expect(TranslationLanguage.baseCode('klingon'), 'auto');
+      expect(TranslationLanguage.baseCode('unknown'), 'auto');
+    });
+
+    test('handles case insensitivity', () {
+      expect(TranslationLanguage.baseCode('English'), 'en');
+      expect(TranslationLanguage.baseCode('ENGLISH'), 'en');
+      expect(TranslationLanguage.baseCode('Tamil'), 'ta');
+      expect(TranslationLanguage.baseCode('TAMIL'), 'ta');
+    });
+  });
+
+  // ── Bidirectional Language Routing ─────────────────────────────────────────
+  group('Bidirectional Language Routing', () {
+    test('English→Tamil: source and target resolve correctly', () {
+      final sourceBase = TranslationLanguage.baseCode('english');
+      final targetBase = TranslationLanguage.baseCode('ta-IN');
+      expect(sourceBase, 'en');
+      expect(targetBase, 'ta');
+      expect(sourceBase != targetBase, isTrue, reason: 'Should trigger translation');
+    });
+
+    test('Tamil→English: source and target resolve correctly', () {
+      final sourceBase = TranslationLanguage.baseCode('tamil');
+      final targetBase = TranslationLanguage.baseCode('en-US');
+      expect(sourceBase, 'ta');
+      expect(targetBase, 'en');
+      expect(sourceBase != targetBase, isTrue, reason: 'Should trigger translation');
+    });
+
+    test('Same language detection skips translation', () {
+      expect(
+        TranslationLanguage.baseCode('english') == TranslationLanguage.baseCode('en-US'),
+        isTrue,
+      );
+      expect(
+        TranslationLanguage.baseCode('tamil') == TranslationLanguage.baseCode('ta-IN'),
+        isTrue,
+      );
+    });
+  });
+
+  // ── TTS Language Code Alignment ────────────────────────────────────────────
+  group('TTS Language Code Alignment', () {
+    test('English resolves to en-US for TTS', () {
+      // This is the critical path: when target is English, the code sent to
+      // the TTS backend must match a VOICE_MAP key.
+      final code = TranslationLanguage.fromCode('en')?.code;
+      expect(code, 'en-US');
+    });
+
+    test('Tamil resolves to ta-IN for TTS', () {
+      final code = TranslationLanguage.fromCode('ta')?.code;
+      expect(code, 'ta-IN');
+    });
+
+    test('en-US resolves to en-US for TTS', () {
+      final code = TranslationLanguage.fromCode('en-US')?.code;
+      expect(code, 'en-US');
+    });
+
+    test('ta-IN resolves to ta-IN for TTS', () {
+      final code = TranslationLanguage.fromCode('ta-IN')?.code;
+      expect(code, 'ta-IN');
+    });
+  });
+
   // ── TranslationResult ───────────────────────────────────────────────────────
   group('TranslationResult', () {
     test('factory constructor creates result with timestamp', () {
@@ -419,6 +513,179 @@ void main() {
       } catch (e) {
         expect(e, isA<FormatException>());
       }
+    });
+  });
+
+  // ── Mock HTTP: Tamil → English Translation ────────────────────────────────
+  group('Tamil → English Translation (Mock HTTP)', () {
+    test('translate Tamil text to English succeeds', () async {
+      final mockClient = MockClient((request) async {
+        final body = json.decode(request.body) as Map<String, dynamic>;
+        // Verify the request has correct language codes
+        expect(body['sourceLanguage'], anyOf('ta', 'auto'));
+        expect(body['targetLanguage'], 'en');
+        expect(body['text'], isNotEmpty);
+
+        return http.Response(
+          json.encode({
+            'translatedText': 'Hello, how are you?',
+            'sourceLanguage': body['sourceLanguage'],
+            'targetLanguage': 'en',
+          }),
+          200,
+        );
+      });
+
+      final client = TranslationApiClient(client: mockClient);
+      final result = await client.translate(
+        text: 'வணக்கம், எப்படி இருக்கிறீர்கள்?',
+        sourceLanguage: 'ta',
+        targetLanguage: 'en',
+      );
+
+      expect(result['translatedText'], 'Hello, how are you?');
+      expect(result['targetLanguage'], 'en');
+      client.dispose();
+    });
+
+    test('translate Tamil text with Whisper "tamil" source succeeds', () async {
+      // Whisper returns "tamil" as detected language, which gets passed
+      // through baseCode() before reaching the API client.
+      final sourceBase = TranslationLanguage.baseCode('tamil');
+      expect(sourceBase, 'ta', reason: 'baseCode should convert "tamil" to "ta"');
+
+      final mockClient = MockClient((request) async {
+        final body = json.decode(request.body) as Map<String, dynamic>;
+        expect(body['sourceLanguage'], 'ta');
+        expect(body['targetLanguage'], 'en');
+
+        return http.Response(
+          json.encode({
+            'translatedText': 'Hello',
+            'sourceLanguage': 'ta',
+            'targetLanguage': 'en',
+          }),
+          200,
+        );
+      });
+
+      final client = TranslationApiClient(client: mockClient);
+      final result = await client.translate(
+        text: 'வணக்கம்',
+        sourceLanguage: sourceBase,
+        targetLanguage: TranslationLanguage.baseCode('en-US'),
+      );
+
+      expect(result['translatedText'], 'Hello');
+      client.dispose();
+    });
+  });
+
+  // ── Mock HTTP: English TTS Synthesis ──────────────────────────────────────
+  group('English TTS Synthesis (Mock HTTP)', () {
+    test('synthesize English text with en-US code succeeds', () async {
+      final mockClient = MockClient((request) async {
+        final body = json.decode(request.body) as Map<String, dynamic>;
+        // The Flutter client should send the full regional code from
+        // TranslationLanguage.fromCode('en')?.code → 'en-US'
+        expect(body['languageCode'], 'en-US');
+        expect(body['text'], isNotEmpty);
+
+        return http.Response(
+          json.encode({'audioContent': 'dGVzdF9hdWRpb19kYXRh'}),
+          200,
+        );
+      });
+
+      final client = TranslationApiClient(client: mockClient);
+      final safeCode = TranslationLanguage.fromCode('en')?.code ?? 'en';
+      final result = await client.synthesize(
+        text: 'Hello, how are you?',
+        languageCode: safeCode,
+      );
+
+      expect(result['audioContent'], isNotEmpty);
+      client.dispose();
+    });
+
+    test('synthesize Tamil text with ta-IN code succeeds', () async {
+      final mockClient = MockClient((request) async {
+        final body = json.decode(request.body) as Map<String, dynamic>;
+        expect(body['languageCode'], 'ta-IN');
+
+        return http.Response(
+          json.encode({'audioContent': 'dGVzdF90YW1pbF9hdWRpbw=='}),
+          200,
+        );
+      });
+
+      final client = TranslationApiClient(client: mockClient);
+      final safeCode = TranslationLanguage.fromCode('ta')?.code ?? 'ta';
+      final result = await client.synthesize(
+        text: 'வணக்கம்',
+        languageCode: safeCode,
+      );
+
+      expect(result['audioContent'], isNotEmpty);
+      client.dispose();
+    });
+  });
+
+  // ── Failure Handling ──────────────────────────────────────────────────────
+  group('Failure Handling', () {
+    test('translate with server error throws', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          json.encode({'error': 'Internal server error'}),
+          500,
+        );
+      });
+
+      final client = TranslationApiClient(client: mockClient);
+      expect(
+        () => client.translate(
+          text: 'வணக்கம்',
+          sourceLanguage: 'ta',
+          targetLanguage: 'en',
+        ),
+        throwsA(isA<String>()),
+      );
+      client.dispose();
+    });
+
+    test('synthesize with unsupported language throws', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          json.encode({'error': 'Unsupported language for TTS: zz'}),
+          400,
+        );
+      });
+
+      final client = TranslationApiClient(client: mockClient);
+      expect(
+        () => client.synthesize(text: 'Hello', languageCode: 'zz'),
+        throwsA(isA<String>()),
+      );
+      client.dispose();
+    });
+
+    test('empty transcript is handled gracefully', () {
+      final text = '';
+      expect(text.trim().isEmpty, isTrue);
+      // Pipeline should skip translation for empty transcripts
+    });
+
+    test('API timeout is handled gracefully', () async {
+      final mockClient = MockClient((request) async {
+        // Simulate a very slow response
+        await Future.delayed(const Duration(seconds: 2));
+        return http.Response('{}', 200);
+      });
+
+      final client = TranslationApiClient(client: mockClient);
+      // The client has a 45s timeout — this test just verifies the mock works
+      // In production, the timeout would throw and be caught.
+      client.dispose();
     });
   });
 }

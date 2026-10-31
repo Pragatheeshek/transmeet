@@ -162,10 +162,11 @@ async function pipeline(req, res) {
     }
 
     const sourceLanguage = req.body?.sourceLanguage || 'auto';
+    const whisperLangHint = (sourceLanguage && sourceLanguage !== 'auto') ? sourceLanguage : null;
 
     // ── Step 1: Whisper STT ───────────────────────────────────────────────────
-    console.log(`[Pipeline] ${requestId} step=STT bytes=${req.file.buffer.length}`);
-    const sttResult = await whisperService.transcribe(req.file.buffer, req.file.originalname || 'audio.m4a');
+    console.log(`[Pipeline] ${requestId} step=STT bytes=${req.file.buffer.length} langHint=${whisperLangHint || 'auto'}`);
+    const sttResult = await whisperService.transcribe(req.file.buffer, req.file.originalname || 'audio.m4a', whisperLangHint);
     const transcript = (sttResult.text || '').trim();
     const detectedLanguage = sttResult.language || 'en';
 

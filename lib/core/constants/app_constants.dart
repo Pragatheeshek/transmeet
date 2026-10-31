@@ -29,6 +29,8 @@ class AppConstants {
   static const String preferredLanguage = 'Preferred Language';
   static const String defaultLanguage = 'English';
   static const String profile = 'Profile';
+  static const String editProfile = 'Edit Profile';
+  static const String updatePassword = 'Update Password';
   static const String settings = 'Settings';
   static const String signOut = 'Sign Out';
   static const String signOutConfirmTitle = 'Sign Out';
